@@ -176,8 +176,6 @@ public class ResponseApiSchemaGuidedReasoner
         EnsureLlmCallsDirectory();
 
         var executionTaskResult = new List<ToolExecutionResult>();
-        string? previousResponseId = null; // Track conversation continuity
-
         // **Arrange**: Configure Azure OpenAI client with Response API support
         var clientOptions = new AzureOpenAIClientOptions(
             AzureOpenAIClientOptions.ServiceVersion.V2025_04_01_Preview);

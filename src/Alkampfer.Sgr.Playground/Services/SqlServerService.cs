@@ -276,7 +276,7 @@ public class SqlServerService
             throw new InvalidOperationException($"No query result found for id '{resultId}'.");
         }
 
-        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+        ExcelPackage.License.SetNonCommercialOrganization("Alkampfer.Sgr");
 
         var destinationPath = ResolveOutputPath(resultId, targetPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);

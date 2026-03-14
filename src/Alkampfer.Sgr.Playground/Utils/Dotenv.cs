@@ -6,7 +6,7 @@ namespace Alkampfer.Sgr.Playground.Utils;
 
 public static class Dotenv
 {
-    private static Dictionary<string, string> envVariables;
+    private static readonly Dictionary<string, string> envVariables;
 
     static Dotenv()
     {
@@ -16,7 +16,7 @@ public static class Dotenv
 
     private static void LoadEnvFile()
     {
-        string envFilePath = FindEnvFile();
+        string? envFilePath = FindEnvFile();
         if (envFilePath != null)
         {
             string[] lines = File.ReadAllLines(envFilePath);
@@ -36,9 +36,9 @@ public static class Dotenv
         }
     }
 
-    private static string FindEnvFile()
+    private static string? FindEnvFile()
     {
-        string currentDirectory = Directory.GetCurrentDirectory();
+        string? currentDirectory = Directory.GetCurrentDirectory();
         while (currentDirectory != null)
         {
             string envFilePath = Path.Combine(currentDirectory, ".env");
@@ -51,12 +51,13 @@ public static class Dotenv
         return null;
     }
 
-    public static string Get(string key)
+    public static string? Get(string key)
     {
-        if (envVariables.ContainsKey(key))
+        if (envVariables.TryGetValue(key, out var value))
         {
-            return envVariables[key];
+            return value;
         }
+
         return Environment.GetEnvironmentVariable(key);
     }
 }

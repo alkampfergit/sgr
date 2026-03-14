@@ -95,8 +95,8 @@ class Program
     /// <param name="verboseOutput">Whether to enable verbose output in the reasoner</param>
     private static async Task InitializeReasoner(bool verboseOutput)
     {
-        var apiKey = Dotenv.Get("OPENAI_API_KEY");
-        var endpoint = Dotenv.Get("AZURE_ENDPOINT");
+        var apiKey = GetRequiredSetting("OPENAI_API_KEY");
+        var endpoint = GetRequiredSetting("AZURE_ENDPOINT");
         var deploymentId = "gpt-5-mini";
 
         // **Always create a Semantic Kernel instance**
@@ -175,10 +175,8 @@ class Program
                 .Start("[yellow]Initializing Semantic Kernel Reasoner...[/]", ctx =>
                 {
                     var databaseService = new DatabaseService();
-                    reasoner = new SchemaGuidedReasoner(kernel!, databaseService)
-                    {
-                        VerboseOutput = verboseOutput
-                    };
+                    reasoner = SchemaGuidedReasonerFactory.CreateDefault(kernel!, databaseService);
+                    reasoner.VerboseOutput = verboseOutput;
                     ctx.Status("[green]Semantic Kernel reasoner ready![/]");
                 });
 
@@ -481,8 +479,8 @@ class Program
 
         // **Create a specialized reasoner that contains only SQL and Excel export functions**
         // This demonstrates how to compose custom reasoners for specific workflows
-        var apiKey = Dotenv.Get("OPENAI_API_KEY");
-        var endpoint = Dotenv.Get("AZURE_ENDPOINT");
+        var apiKey = GetRequiredSetting("OPENAI_API_KEY");
+        var endpoint = GetRequiredSetting("AZURE_ENDPOINT");
         var deploymentId = "gpt-5-nano";
         var databaseService = new DatabaseService();
         var sqlServerService = new SqlServerService();
@@ -498,7 +496,7 @@ class Program
         };
 
         // **Create a specialized BusinessFunctionFactory with only SQL-related functions**
-        var loggerFactory = kernel.Services.GetRequiredService<ILoggerFactory>();
+        var loggerFactory = kernel!.Services.GetRequiredService<ILoggerFactory>();
         var sqlFunctionFactory = new BusinessFunctionFactory(databaseService, sqlServerService, kernel, loggerFactory, sqlToolTypes);
 
         // **Create custom options for SQL workflow**
@@ -610,5 +608,16 @@ IMPORTANT: You must always respond with structured JSON that includes:
                 .Header("Specialized SQL Reasoner")
                 .Border(BoxBorder.Rounded)
                 .BorderColor(Color.Green));
+    }
+
+    private static string GetRequiredSetting(string key)
+    {
+        var value = Dotenv.Get(key);
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        throw new InvalidOperationException($"Missing required configuration value '{key}'.");
     }
 }

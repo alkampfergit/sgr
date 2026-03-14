@@ -72,7 +72,7 @@ public class SqlQuery
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
             }
         },
@@ -246,7 +246,7 @@ public class SqlQuery
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 retvalue = null;
             }

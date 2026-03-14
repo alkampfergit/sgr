@@ -74,7 +74,7 @@ public sealed class ExecuteSqlQueryFunction : BusinessFunction<ExecuteSqlQueryTo
 
         sqlQueryToExecute = await TranslateNaturalLanguageToSqlAsync(
             parameters.DatabaseName,
-            parameters.QueryDescription,
+            parameters.QueryDescription ?? throw new InvalidOperationException("QueryDescription is required to generate SQL."),
             cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
@@ -167,7 +167,7 @@ public sealed class ExecuteSqlQueryFunction : BusinessFunction<ExecuteSqlQueryTo
             SchemaCollectionStateKey,
             out var schemaCollection) && schemaCollection != null)
         {
-            if (schemaCollection.TryGetSchema(databaseName, out var schema))
+            if (schemaCollection.TryGetSchema(databaseName, out var schema) && schema != null)
             {
                 _logger.LogInformation(
                     "Found schema for database '{DatabaseName}' in state manager with {TableCount} tables",
