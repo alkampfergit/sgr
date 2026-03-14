@@ -2,5 +2,6 @@
   <Folder Name="/src/">
     <Project Path="src/Alkampfer.Sgr.Playground/Alkampfer.Sgr.Playground.csproj" />
     <Project Path="src/Alkampfer.Sgr/Alkampfer.Sgr.csproj" />
+    <Project Path="src/Alkampfer.Sgr.Tests/Alkampfer.Sgr.Tests.csproj" />
   </Folder>
 </Solution>
