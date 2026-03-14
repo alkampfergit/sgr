@@ -399,22 +399,20 @@ public class PolymorphicSchemaManager<TContainer, TPolymorphicBase>
 
     public static string GetDiscriminatorValue(Type type)
     {
-        return type.Name;
-
         // Convert PascalCase to snake_case: "SendEmailToolCall" -> "send_email_tool_call"
         var name = type.Name;
-        var result = string.Empty;
+        var result = new StringBuilder(name.Length + 8);
 
         for (int i = 0; i < name.Length; i++)
         {
             if (i > 0 && char.IsUpper(name[i]))
             {
-                result += "_";
+                result.Append('_');
             }
-            result += char.ToLower(name[i]);
+            result.Append(char.ToLowerInvariant(name[i]));
         }
 
-        return result;
+        return result.ToString();
     }
 
     internal IReadOnlyList<Type> DerivedPolymorphicTypes => _derivedPolymorphicTypes.AsReadOnly();
@@ -567,12 +565,13 @@ internal class GenericPolymorphicConverter<TPolymorphicBase> : JsonConverter<TPo
             throw new JsonSerializationException($"Missing '{_discriminatorProperty}' discriminator property for polymorphic {typeof(TPolymorphicBase).Name} deserialization");
         }
 
-        var discriminatorValue = discriminatorToken.Value<string>()?.ToLower();
+        var discriminatorValue = NormalizeDiscriminator(discriminatorToken.Value<string>());
 
         Type? targetType = null;
         foreach (var polymorphicType in _derivedTypes)
         {
-            var expectedDiscriminator = PolymorphicSchemaManager<object, TPolymorphicBase>.GetDiscriminatorValue(polymorphicType);
+            var expectedDiscriminator = NormalizeDiscriminator(
+                PolymorphicSchemaManager<object, TPolymorphicBase>.GetDiscriminatorValue(polymorphicType));
             if (string.Equals(discriminatorValue, expectedDiscriminator, StringComparison.OrdinalIgnoreCase))
             {
                 targetType = polymorphicType;
@@ -595,5 +594,39 @@ internal class GenericPolymorphicConverter<TPolymorphicBase> : JsonConverter<TPo
     public override void WriteJson(JsonWriter writer, TPolymorphicBase? value, JsonSerializer serializer)
     {
         throw new NotImplementedException("CanWrite is false, this method should not be called");
+    }
+
+    private static string? NormalizeDiscriminator(string? discriminator)
+    {
+        if (string.IsNullOrWhiteSpace(discriminator))
+        {
+            return discriminator;
+        }
+
+        var normalized = new StringBuilder(discriminator.Length + 8);
+        for (int i = 0; i < discriminator.Length; i++)
+        {
+            var current = discriminator[i];
+            if (char.IsUpper(current))
+            {
+                if (i > 0 && discriminator[i - 1] != '_')
+                {
+                    normalized.Append('_');
+                }
+
+                normalized.Append(char.ToLowerInvariant(current));
+                continue;
+            }
+
+            normalized.Append(char.ToLowerInvariant(current));
+        }
+
+        var normalizedValue = normalized.ToString();
+        if (!normalizedValue.EndsWith("_tool_call", StringComparison.Ordinal))
+        {
+            normalizedValue += "_tool_call";
+        }
+
+        return normalizedValue;
     }
 }
