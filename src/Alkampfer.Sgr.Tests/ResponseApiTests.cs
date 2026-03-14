@@ -1,9 +1,8 @@
 using NUnit.Framework;
 using Alkampfer.Sgr.Utils;
-using Alkampfer.Sgr.Playground.Utils;
-using Alkampfer.Sgr.Playground.BusinessFunctions;
+using Alkampfer.Sgr.BusinessFunctions;
 using Azure.AI.OpenAI;
- using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using OpenAI.Responses;
@@ -185,11 +184,8 @@ public class ResponseApiTests : SemanticKernelTestBase
                 Console.WriteLine($"   └─ Reasoning Output: {usage.OutputTokenDetails.ReasoningTokenCount}");
             }
 
-            // **Assert**: Deserialize the JSON response using NextStepManager
-            var manager = new NextStepManager()
-                .AddDerivedType<SendEmailToolCall>()
-                .AddDerivedType<GetCustomerDataToolCall>()
-                .AddDerivedType<IssueInvoiceToolCall>();
+            // **Assert**: Deserialize the JSON response using the active polymorphic schema manager
+            var manager = CreateNextStepSchemaManager();
 
             var nextStep = manager.DeserializeFromJson(assistantMessage!);
 
@@ -232,7 +228,7 @@ public class ResponseApiTests : SemanticKernelTestBase
     /// <summary>
     /// **Helper method to generate polymorphic JSON schema for NextStep**
     ///
-    /// Creates a NextStepManager configured with the standard set of ToolCall types
+    /// Creates the active polymorphic schema manager configured with the standard ToolCall types
     /// and generates the JSON schema for use in Response API calls.
     ///
     /// The schema includes:
@@ -243,11 +239,16 @@ public class ResponseApiTests : SemanticKernelTestBase
     /// <returns>JSON schema string with proper polymorphic ToolCall support</returns>
     private static string GeneratePolymorphicNextStepJsonSchema()
     {
-        var manager = new NextStepManager()
+        var manager = CreateNextStepSchemaManager();
+
+        return manager.GenerateSchema();
+    }
+
+    private static PolymorphicSchemaManager<Alkampfer.Sgr.Models.NextStep, Alkampfer.Sgr.Models.ToolCall> CreateNextStepSchemaManager()
+    {
+        return new PolymorphicSchemaManager<Alkampfer.Sgr.Models.NextStep, Alkampfer.Sgr.Models.ToolCall>()
             .AddDerivedType<SendEmailToolCall>()
             .AddDerivedType<GetCustomerDataToolCall>()
             .AddDerivedType<IssueInvoiceToolCall>();
-
-        return manager.GenerateSchema();
     }
 }

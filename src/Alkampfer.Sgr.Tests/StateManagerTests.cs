@@ -1,6 +1,5 @@
 using Alkampfer.Sgr.Services;
 using Alkampfer.Sgr.Models;
-using Alkampfer.Sgr.Playground.Models;
 
 namespace Alkampfer.Sgr.Tests;
 
@@ -837,4 +836,3 @@ public class StateManagerTests
 
     #endregion
 }
-

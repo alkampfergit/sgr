@@ -4,7 +4,7 @@ using System.Text.Json;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 
-namespace Alkampfer.Sgr.Playground.BusinessFunctions;
+namespace Alkampfer.Sgr.BusinessFunctions;
 
 /// <summary>
 /// **Business function for task completion reporting**

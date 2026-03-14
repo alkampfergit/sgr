@@ -9,9 +9,9 @@ using System.Text;
 using Microsoft.Data.SqlClient;
 using OfficeOpenXml;
 using Alkampfer.Sgr.Models;
-using Alkampfer.Sgr.Playground.Utils;
+using Alkampfer.Sgr.Utils;
 
-namespace Alkampfer.Sgr.Playground.Services;
+namespace Alkampfer.Sgr.Services;
 
 /// <summary>
 /// Provides access to a SQL Server instance along with lightweight state

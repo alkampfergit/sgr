@@ -1,4 +1,4 @@
-namespace Alkampfer.Sgr.Playground.Models;
+namespace Alkampfer.Sgr.Models;
 
 /// <summary>
 /// **Product model** representing product catalog items.

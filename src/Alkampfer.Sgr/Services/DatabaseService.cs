@@ -1,7 +1,7 @@
 using System.Text.Json;
-using Alkampfer.Sgr.Playground.Models;
+using Alkampfer.Sgr.Models;
 
-namespace Alkampfer.Sgr.Playground.Services;
+namespace Alkampfer.Sgr.Services;
 
 /// <summary>
 /// **Database service** that manages the in-memory database for business operations.

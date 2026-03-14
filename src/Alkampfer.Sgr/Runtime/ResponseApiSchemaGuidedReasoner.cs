@@ -3,11 +3,11 @@ using Azure.AI.OpenAI;
 using Newtonsoft.Json;
 using OpenAI.Responses;
 using Alkampfer.Sgr.Models;
-using Alkampfer.Sgr.Playground.BusinessFunctions;
+using Alkampfer.Sgr.BusinessFunctions;
 using Spectre.Console;
 using System.Text;
 
-namespace Alkampfer.Sgr.Playground.Services;
+namespace Alkampfer.Sgr.Runtime;
 
 #pragma warning disable OPENAI001
 

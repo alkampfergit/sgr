@@ -4,9 +4,8 @@ using Microsoft.Extensions.Logging;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Services;
-using Alkampfer.Sgr.Playground.Services;
 
-namespace Alkampfer.Sgr.Playground.BusinessFunctions;
+namespace Alkampfer.Sgr.BusinessFunctions;
 
 /// <summary>
 /// Business function that retrieves the list of databases available on the configured SQL Server instance.

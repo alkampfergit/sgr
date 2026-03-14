@@ -3,11 +3,11 @@ using Microsoft.SemanticKernel;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Utils;
-using Alkampfer.Sgr.Playground.Services;
+using Alkampfer.Sgr.Services;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Alkampfer.Sgr.Playground.BusinessFunctions;
+namespace Alkampfer.Sgr.Runtime;
 
 /// <summary>
 /// **Record containing business function and parameter type information**

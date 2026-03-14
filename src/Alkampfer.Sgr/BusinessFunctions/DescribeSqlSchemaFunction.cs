@@ -5,9 +5,9 @@ using System.Linq;
 using System.Text;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
-using Alkampfer.Sgr.Playground.Services;
+using Alkampfer.Sgr.Services;
 
-namespace Alkampfer.Sgr.Playground.BusinessFunctions;
+namespace Alkampfer.Sgr.BusinessFunctions;
 
 /// <summary>
 /// Business function that produces a focused schema summary to help the LLM reason about table structures.

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace Alkampfer.Sgr.Playground.Utils;
+namespace Alkampfer.Sgr.Utils;
 
 public static class Dotenv
 {

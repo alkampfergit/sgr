@@ -4,7 +4,6 @@ using NJsonSchema.NewtonsoftJson.Generation;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Alkampfer.Sgr.Utils;
-using Alkampfer.Sgr.Playground.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 

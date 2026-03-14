@@ -1,4 +1,4 @@
-namespace Alkampfer.Sgr.Playground.Models;
+namespace Alkampfer.Sgr.Models;
 
 /// <summary>
 /// **Rule model** representing customer-specific business rules.

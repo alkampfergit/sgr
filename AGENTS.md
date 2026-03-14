@@ -12,6 +12,7 @@
 
 ## Common Commands
 - Restore/build solution: `dotnet build sgr.slnx -c Debug`
+- Run tests: `dotnet test sgr.slnx -c Debug`
 - Run playground: `dotnet run --project src/Alkampfer.Sgr.Playground/Alkampfer.Sgr.Playground.csproj`
 - Build library only: `dotnet build src/Alkampfer.Sgr/Alkampfer.Sgr.csproj -c Debug`
 
@@ -26,5 +27,6 @@
 ## Notes For Agents
 - Prefer changing shared reasoning logic in `src/Alkampfer.Sgr` unless the behavior is playground-specific.
 - Keep `sgr.slnx` as the canonical solution file; do not introduce a legacy `.sln` unless explicitly requested.
-- There are currently no test projects in the repo. Use `dotnet build` as the baseline verification step after edits.
+- The repo includes a test project in `src/Alkampfer.Sgr.Tests`. Use `dotnet build` as the minimum verification step and run `dotnet test sgr.slnx -c Debug` when changes could affect behavior.
+- Do not consider a task complete if the solution does not compile or if any test fails. If build or test failures remain, report that explicitly as an open issue.
 - Current build is clean for errors but has existing compiler warnings; do not treat the repo as warning-free.

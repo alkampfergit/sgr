@@ -7,13 +7,12 @@ using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.Utils;
 using Alkampfer.Sgr.Services;
-using Alkampfer.Sgr.Playground.BusinessFunctions;
 using Spectre.Console;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
-namespace Alkampfer.Sgr.Playground.Services;
+namespace Alkampfer.Sgr.Runtime;
 
 /// <summary>
 /// Represents the result of a reasoning step containing both the NextStep object and function name.
@@ -130,7 +129,7 @@ public class SchemaGuidedReasoner
     /// <summary>
     /// Generates a summary of available tools from tool information array.
     /// </summary>
-    internal static string GenerateToolsSummary(ToolInformation[] availableTools)
+    public static string GenerateToolsSummary(ToolInformation[] availableTools)
     {
         var summary = new StringBuilder();
 
@@ -361,7 +360,7 @@ public sealed class SchemaGuidedReasonerOptions
         JsonSerializerOptions = CreateDefaultJsonOptions()
     };
 
-    internal static JsonSerializerOptions CreateDefaultJsonOptions() => new()
+    public static JsonSerializerOptions CreateDefaultJsonOptions() => new()
     {
         WriteIndented = true,
         PropertyNameCaseInsensitive = true,
@@ -417,7 +416,7 @@ public static class SchemaGuidedReasonerFactory
     /// <param name="kernel">The Semantic Kernel instance (optional, creates minimal kernel if not provided)</param>
     /// <param name="sqlServerService">The SQL Server service instance (optional, creates new if not provided)</param>
     /// <returns>A configured BusinessFunctionFactory with default tools</returns>
-    internal static BusinessFunctionFactory CreateDefaultBusinessFunctionFactory(
+    public static BusinessFunctionFactory CreateDefaultBusinessFunctionFactory(
         DatabaseService databaseService,
         Kernel? kernel = null,
         SqlServerService? sqlServerService = null)
@@ -447,7 +446,7 @@ public static class SchemaGuidedReasonerFactory
     /// <summary>
     /// Builds default reasoner options capturing the existing business assistant persona.
     /// </summary>
-    internal static SchemaGuidedReasonerOptions CreateDefaultOptions(DatabaseService databaseService)
+    public static SchemaGuidedReasonerOptions CreateDefaultOptions(DatabaseService databaseService)
     {
         if (databaseService is null) throw new ArgumentNullException(nameof(databaseService));
 

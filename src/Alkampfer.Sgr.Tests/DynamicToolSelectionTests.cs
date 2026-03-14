@@ -1,9 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
-using Alkampfer.Sgr.Playground.BusinessFunctions;
+using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Services;
-using Alkampfer.Sgr.Playground.Services;
+using Alkampfer.Sgr.Runtime;
 using System.Linq;
 
 namespace Alkampfer.Sgr.Tests;

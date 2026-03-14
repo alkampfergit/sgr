@@ -4,10 +4,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
-using Alkampfer.Sgr.Playground.Models;
-using Alkampfer.Sgr.Playground.Services;
+using Alkampfer.Sgr.Services;
 
-namespace Alkampfer.Sgr.Playground.BusinessFunctions;
+namespace Alkampfer.Sgr.BusinessFunctions;
 
 /// <summary>
 /// **Business function for email sending operations**

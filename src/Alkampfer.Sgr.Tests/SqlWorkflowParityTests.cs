@@ -7,8 +7,8 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.Services;
-using Alkampfer.Sgr.Playground.BusinessFunctions;
-using Alkampfer.Sgr.Playground.Services;
+using Alkampfer.Sgr.BusinessFunctions;
+using Alkampfer.Sgr.Runtime;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 
 namespace Alkampfer.Sgr.Tests;

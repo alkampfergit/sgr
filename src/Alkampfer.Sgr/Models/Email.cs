@@ -1,4 +1,4 @@
-namespace Alkampfer.Sgr.Playground.Models;
+namespace Alkampfer.Sgr.Models;
 
 /// <summary>
 /// **Email model** representing sent email communications.

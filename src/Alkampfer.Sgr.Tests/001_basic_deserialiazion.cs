@@ -8,7 +8,6 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
 using Alkampfer.Sgr.Utils;
-using Alkampfer.Sgr.Playground.Utils;
 using Newtonsoft.Json.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -217,4 +216,3 @@ public class Person
     [Required]
     public string Address { get; set; } = default!;
 }
-

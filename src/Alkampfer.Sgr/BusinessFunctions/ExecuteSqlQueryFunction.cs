@@ -6,11 +6,10 @@ using Microsoft.SemanticKernel.ChatCompletion;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Services;
-using Alkampfer.Sgr.Playground.Services;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
-namespace Alkampfer.Sgr.Playground.BusinessFunctions;
+namespace Alkampfer.Sgr.BusinessFunctions;
 
 /// <summary>
 /// Executes SQL queries against the configured SQL Server instance and stores the full result for later reuse.
