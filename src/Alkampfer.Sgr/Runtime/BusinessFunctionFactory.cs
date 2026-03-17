@@ -4,6 +4,7 @@ using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Utils;
 using Alkampfer.Sgr.Services;
+using Alkampfer.Sgr.Telemetry;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -57,6 +58,7 @@ public class BusinessFunctionFactory
     private readonly SqlServerService _sqlServerService;
     private readonly Kernel _kernel;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<BusinessFunctionFactory> _logger;
 
     /// <summary>
     /// **Constructor that initializes business functions with polymorphic schema support**.
@@ -81,6 +83,7 @@ public class BusinessFunctionFactory
         _sqlServerService = sqlServerService ?? throw new ArgumentNullException(nameof(sqlServerService));
         _kernel = kernel ?? throw new ArgumentNullException(nameof(kernel));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _logger = loggerFactory.CreateLogger<BusinessFunctionFactory>();
         if (toolCallTypes?.Any() != true)
         {
             throw new ArgumentException("At least one ToolCall type must be provided", nameof(toolCallTypes));
@@ -268,8 +271,34 @@ public class BusinessFunctionFactory
         var businessFunction = match?.BusinessFunction;
         if (businessFunction == null) throw new InvalidOperationException("Business function not available for matched entry.");
 
-        var result = await businessFunction.ExecuteAsync(toolCall, cancellationToken);
-        return result;
+        var toolName = toolCall.Type;
+
+        using var toolActivity = SgrTelemetry.StartToolCall(toolName, toolCall);
+        toolActivity?.SetTag("sgr.tool.handler", businessFunction.GetType().Name);
+
+        _logger.LogInformation(
+            "Dispatching tool {ToolName} with handler {HandlerName}",
+            toolName,
+            businessFunction.GetType().Name);
+
+        try
+        {
+            var result = await businessFunction.ExecuteAsync(toolCall, cancellationToken).ConfigureAwait(false);
+            SgrTelemetry.RecordToolResult(toolActivity, result.Summary);
+
+            _logger.LogInformation(
+                "Tool {ToolName} completed with summary {Summary}",
+                toolName,
+                result.Summary);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            SgrTelemetry.MarkError(toolActivity, ex);
+            _logger.LogError(ex, "Tool {ToolName} failed", toolName);
+            throw;
+        }
     }
 
     /// <summary>

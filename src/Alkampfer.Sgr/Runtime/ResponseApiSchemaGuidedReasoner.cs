@@ -4,7 +4,11 @@ using Newtonsoft.Json;
 using OpenAI.Responses;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
+using Alkampfer.Sgr.Telemetry;
 using Spectre.Console;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Diagnostics;
 using System.Text;
 
 namespace Alkampfer.Sgr.Runtime;
@@ -32,6 +36,7 @@ public class ResponseApiSchemaGuidedReasoner
     private readonly string _deploymentId;
     private readonly BusinessFunctionFactory _functionFactory;
     private readonly SchemaGuidedReasonerOptions _options;
+    private readonly ILogger<ResponseApiSchemaGuidedReasoner> _logger;
 
     /// <summary>
     /// Controls whether to display detailed debug output during reasoning.
@@ -113,13 +118,15 @@ public class ResponseApiSchemaGuidedReasoner
         string azureApiKey,
         string deploymentId,
         BusinessFunctionFactory businessFunctionFactory,
-        SchemaGuidedReasonerOptions? options = null)
+        SchemaGuidedReasonerOptions? options = null,
+        ILogger<ResponseApiSchemaGuidedReasoner>? logger = null)
     {
         _azureEndpoint = azureEndpoint ?? throw new ArgumentNullException(nameof(azureEndpoint));
         _azureApiKey = azureApiKey ?? throw new ArgumentNullException(nameof(azureApiKey));
         _deploymentId = deploymentId ?? throw new ArgumentNullException(nameof(deploymentId));
         _functionFactory = businessFunctionFactory ?? throw new ArgumentNullException(nameof(businessFunctionFactory));
         _options = options ?? SchemaGuidedReasonerOptions.CreateDefault();
+        _logger = logger ?? NullLogger<ResponseApiSchemaGuidedReasoner>.Instance;
     }
 
     /// <summary>
@@ -168,6 +175,7 @@ public class ResponseApiSchemaGuidedReasoner
     /// </summary>
     public async Task<string> ReasonAndActAsync(string userRequest)
     {
+        using var executionActivity = SgrTelemetry.StartReasonerExecution("response-api", userRequest);
         // Reset session stats for new reasoning session
         CurrentSessionStats = new TokenUsageStats();
 
@@ -186,9 +194,13 @@ public class ResponseApiSchemaGuidedReasoner
             clientOptions);
 
         var responseClient = client.GetOpenAIResponseClient(_deploymentId);
+        _logger.LogInformation("Starting direct Response API SGR execution.");
 
         for (int step = 1; step <= 20; step++)
         {
+            using var stepActivity = SgrTelemetry.StartPlanningStep("response-api", step);
+            stepActivity?.SetTag("sgr.executed_task_count", executionTaskResult.Count);
+
             if (VerboseOutput)
             {
                 AnsiConsole.Write($"[yellow]Planning step_{step}...[/] ");
@@ -280,12 +292,23 @@ public class ResponseApiSchemaGuidedReasoner
                     },
                 };
 
-                OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options);
+                using var modelActivity = SgrTelemetry.StartModelCall(
+                    provider: "azure-openai-response-api",
+                    model: _deploymentId,
+                    systemPrompt: systemPrompt,
+                    userPrompt: dumpAllPrompt,
+                    schema: schemaStr);
+
+                _logger.LogInformation("Requesting next reasoning step from the Azure OpenAI Response API.");
+                _logger.LogDebug("Response API system prompt: {SystemPrompt}", systemPrompt);
+                _logger.LogDebug("Response API prompt payload: {PromptPayload}", dumpAllPrompt);
+
+                OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
 
                 // conversationId = response.Id;
 
                 // Dump the LLM call details to files
-                await DumpLlmCallAsync(_llmCallCounter, dumpAllPrompt, schemaStr, response);
+                await DumpLlmCallAsync(_llmCallCounter, dumpAllPrompt, schemaStr, response).ConfigureAwait(false);
 
                 // **Track token usage it is different for the classic API **
                 if (response.Usage != null)
@@ -297,6 +320,11 @@ public class ResponseApiSchemaGuidedReasoner
                         TotalTokenCount = response.Usage.TotalTokenCount
                     };
                     CurrentSessionStats.AddUsage(usage);
+                    SgrTelemetry.RecordUsage(
+                        modelActivity,
+                        usage.InputTokenCount,
+                        usage.OutputTokenCount,
+                        usage.TotalTokenCount);
 
                     if (VerboseOutput)
                     {
@@ -312,6 +340,8 @@ public class ResponseApiSchemaGuidedReasoner
 
                 // **Extract the assistant's response**
                 var assistantRaw = String.Join("\n", responseMessage.Content.Select(c => c.Text));
+                SgrTelemetry.RecordModelResponse(modelActivity, assistantRaw);
+                _logger.LogDebug("Response API assistant response: {AssistantResponse}", assistantRaw);
 
                 if (string.IsNullOrEmpty(assistantRaw))
                 {
@@ -371,6 +401,7 @@ public class ResponseApiSchemaGuidedReasoner
 
                 if (nextStep.Function is ReportTaskCompletionToolCall completionParameter)
                 {
+                    _logger.LogInformation("Response API SGR execution completed: {Summary}", completionParameter.Summary);
                     if (VerboseOutput)
                     {
                         AnsiConsole.MarkupLine($"[blue]Task completed: {Markup.Escape(completionParameter.Summary)}[/]");
@@ -406,6 +437,9 @@ public class ResponseApiSchemaGuidedReasoner
             }
             catch (Exception ex)
             {
+                SgrTelemetry.MarkError(stepActivity, ex);
+                SgrTelemetry.MarkError(executionActivity, ex);
+                _logger.LogError(ex, "Response API reasoning failed at step {Step}", step);
                 // Use WriteLine to avoid markup parsing issues with exception messages
                 AnsiConsole.Write("[red]Error in reasoning step ");
                 AnsiConsole.Write(step.ToString());

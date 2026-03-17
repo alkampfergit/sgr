@@ -4,15 +4,18 @@ using Microsoft.Extensions.Logging;
 using System.Net.Http;
 using System.Text.Json;
 using Alkampfer.Sgr.Services;
+using Alkampfer.Sgr.Telemetry;
 using Alkampfer.Sgr.Utils;
 using Alkampfer.Sgr.Runtime;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Spectre.Console;
 using Alkampfer.Sgr.BusinessFunctions;
+using Alkampfer.Sgr.Playground;
 using Alkampfer.Sgr.Playground.SqlScenario.SqlServer.SqlUtils;
 using Microsoft.Extensions.Logging.Abstractions;
 using OpenAI.Responses;
+using System.Diagnostics;
 
 /// <summary>
 /// Main program class for the Schema-Guided Reasoning playground
@@ -23,10 +26,16 @@ class Program
     private static Kernel? kernel;
     private static SchemaGuidedReasoner? reasoner;
     private static ResponseApiSchemaGuidedReasoner? responseApiReasoner;
+    private static PlaygroundTelemetry? telemetry;
+    private static ILogger<Program>? logger;
     private static bool useResponseApi = false;
 
     static async Task Main(string[] args)
     {
+        using var playgroundTelemetry = PlaygroundTelemetry.Create();
+        telemetry = playgroundTelemetry;
+        logger = playgroundTelemetry.LoggerFactory.CreateLogger<Program>();
+
         System.Data.Common.DbProviderFactories.RegisterFactory(
             "Microsoft.Data.SqlClient",
             Microsoft.Data.SqlClient.SqlClientFactory.Instance);
@@ -43,6 +52,9 @@ class Program
         AnsiConsole.Write(
             new Rule("[bold blue]Schema-Guided Reasoning with C# and Semantic Kernel[/]")
                 .RuleStyle("grey"));
+
+        AnsiConsole.MarkupLine($"[grey]OpenTelemetry OTLP endpoint:[/] {playgroundTelemetry.OtlpEndpoint}");
+        logger.LogInformation("Playground telemetry initialized with OTLP endpoint {OtlpEndpoint}", playgroundTelemetry.OtlpEndpoint);
 
         // Ask user which reasoner to use
         var reasonerChoice = AnsiConsole.Prompt(
@@ -106,12 +118,8 @@ class Program
             {
                 // Setup kernel with Azure OpenAI configuration
                 var kernelBuilder = Kernel.CreateBuilder();
-                kernelBuilder.Services.AddLogging(l => l
-                    .SetMinimumLevel(LogLevel.Warning)
-                    .AddConsole()
-                );
-
-                var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+                kernelBuilder.Services.AddSingleton<ILoggerFactory>(telemetry!.LoggerFactory);
+                kernelBuilder.Services.AddLogging();
 
                 // Configure Azure OpenAI connection
                 kernelBuilder.AddAzureOpenAIChatCompletion(
@@ -145,7 +153,8 @@ class Program
                             azureApiKey: apiKey,
                             deploymentId: deploymentId,
                             businessFunctionFactory: businessFunctionFactory,
-                            options: options)
+                            options: options,
+                            logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiSchemaGuidedReasoner>())
                         {
                             VerboseOutput = verboseOutput,
 #pragma warning disable OPENAI001
@@ -261,16 +270,6 @@ class Program
     /// </summary>
     private static async Task RunOriginalPythonTasksExample()
     {
-        // **Initialize a fresh StateManager instance for this scenario execution**
-        StateManager.Start();
-
-        var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
-        AnsiConsole.Write(
-            new Panel($"[bold red]🚀 Original Python Tasks - Schema-Guided Reasoning Demo[/]\n[dim]Using: {reasonerType}[/]")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Red));
-
-        // The exact tasks from the Python original
         var tasks = new[]
         {
             "Rule: address sama@openai.com as 'The SAMA', always give him 5% discount.",
@@ -280,54 +279,68 @@ class Program
             "redo last elon@x.com invoice: use 3x discount of sama@openai.com"
         };
 
-        foreach (var (task, index) in tasks.Select((t, i) => (t, i + 1)))
+        await RunScenarioAsync("Original Python Tasks", string.Join(Environment.NewLine, tasks), async () =>
         {
+            var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
+            AnsiConsole.Write(
+                new Panel($"[bold red]🚀 Original Python Tasks - Schema-Guided Reasoning Demo[/]\n[dim]Using: {reasonerType}[/]")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Red));
+
+            foreach (var (task, index) in tasks.Select((t, i) => (t, i + 1)))
+            {
+                using var taskActivity = SgrTelemetry.ActivitySource.StartActivity("sgr.example.task", ActivityKind.Internal);
+                taskActivity?.SetTag("sgr.example.task.index", index);
+                taskActivity?.SetTag("sgr.user.request", task);
+
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(
+                    new Rule($"[bold blue]Task {index}[/]")
+                        .RuleStyle("blue"));
+
+                AnsiConsole.MarkupLine($"[dim]Task:[/] {task}");
+                AnsiConsole.WriteLine();
+
+                try
+                {
+                    var result = await AnsiConsole.Status()
+                        .StartAsync($"[yellow]Executing task {index} with SGR...[/]", async ctx =>
+                        {
+                            return await ExecuteReasoningTask(task);
+                        });
+
+                    AnsiConsole.Write(
+                        new Panel($"[green]Task {index} Result:[/] {Markup.Escape(result)}")
+                            .Header($"Task {index} Complete")
+                            .Border(BoxBorder.Rounded)
+                            .BorderColor(Color.Green));
+                }
+                catch (Exception ex)
+                {
+                    SgrTelemetry.MarkError(taskActivity, ex);
+                    AnsiConsole.Write(
+                        new Panel($"[red]Error in Task {index}:[/] {ex.Message}")
+                            .Header($"Task {index} Failed")
+                            .Border(BoxBorder.Rounded)
+                            .BorderColor(Color.Red));
+                }
+            }
+
             AnsiConsole.WriteLine();
             AnsiConsole.Write(
-                new Rule($"[bold blue]Task {index}[/]")
-                    .RuleStyle("blue"));
+                new Panel("""
+                [bold green]Schema-Guided Reasoning Demonstration Complete![/]
 
-            AnsiConsole.MarkupLine($"[dim]Task:[/] {task}");
-            AnsiConsole.WriteLine();
-
-            try
-            {
-                var result = await AnsiConsole.Status()
-                    .StartAsync($"[yellow]Executing task {index} with SGR...[/]", async ctx =>
-                    {
-                        return await ExecuteReasoningTask(task);
-                    });
-
-                AnsiConsole.Write(
-                    new Panel($"[green]Task {index} Result:[/] {Markup.Escape(result)}")
-                        .Header($"Task {index} Complete")
-                        .Border(BoxBorder.Rounded)
-                        .BorderColor(Color.Green));
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.Write(
-                    new Panel($"[red]Error in Task {index}:[/] {ex.Message}")
-                        .Header($"Task {index} Failed")
-                        .Border(BoxBorder.Rounded)
-                        .BorderColor(Color.Red));
-            }
-        }
-
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(
-            new Panel("""
-            [bold green]Schema-Guided Reasoning Demonstration Complete![/]
-
-            This demo shows how the C# implementation now matches the Python original:
-            • [yellow]Structured Reasoning:[/] LLM generates NextStep JSON on each turn
-            • [yellow]Manual Tool Dispatch:[/] No automatic tool calling - explicit control
-            • [yellow]Step-by-step Execution:[/] Clear reasoning progression
-            • [yellow]Task-oriented:[/] Multi-step business logic handled correctly
-            """)
-                .Header("SGR Demo Results")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Green));
+                This demo shows how the C# implementation now matches the Python original:
+                • [yellow]Structured Reasoning:[/] LLM generates NextStep JSON on each turn
+                • [yellow]Manual Tool Dispatch:[/] No automatic tool calling - explicit control
+                • [yellow]Step-by-step Execution:[/] Clear reasoning progression
+                • [yellow]Task-oriented:[/] Multi-step business logic handled correctly
+                """)
+                    .Header("SGR Demo Results")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Green));
+        });
     }
 
     /// <summary>
@@ -336,42 +349,41 @@ class Program
     /// </summary>
     private static async Task RunSimpleEmailExample()
     {
-        // **Initialize a fresh StateManager instance for this scenario execution**
-        StateManager.Start();
-
-        var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
-        AnsiConsole.Write(
-            new Panel($"[bold yellow]🧪 Test 1: Simple Email Task[/]\n[dim]Using: {reasonerType}[/]")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Yellow));
-
         var prompt = "Send an email to john@example.com with subject 'Welcome' and body 'Thank you for joining us!'";
-
-        AnsiConsole.MarkupLine($"[dim]Prompt:[/] {prompt}");
-        AnsiConsole.WriteLine();
-
-        var result = await AnsiConsole.Status()
-            .StartAsync("[yellow]Processing email task...[/]", async ctx =>
-            {
-                return await ExecuteReasoningTask(prompt);
-            });
-
-        AnsiConsole.Write(
-            new Panel($"[green]Result:[/] {Markup.Escape(result)}")
-                .Header("Email Task Complete")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Green));
-
-        // Display token usage stats if using Response API
-        if (useResponseApi && responseApiReasoner != null)
+        await RunScenarioAsync("Simple Email Task", prompt, async () =>
         {
-            AnsiConsole.WriteLine();
+            var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
             AnsiConsole.Write(
-                new Panel($"[aqua]{responseApiReasoner.CurrentSessionStats}[/]")
-                    .Header("Token Usage Statistics")
+                new Panel($"[bold yellow]🧪 Test 1: Simple Email Task[/]\n[dim]Using: {reasonerType}[/]")
                     .Border(BoxBorder.Rounded)
-                    .BorderColor(Color.Aqua));
-        }
+                    .BorderColor(Color.Yellow));
+
+            AnsiConsole.MarkupLine($"[dim]Prompt:[/] {prompt}");
+            AnsiConsole.WriteLine();
+
+            var result = await AnsiConsole.Status()
+                .StartAsync("[yellow]Processing email task...[/]", async ctx =>
+                {
+                    return await ExecuteReasoningTask(prompt);
+                });
+
+            AnsiConsole.Write(
+                new Panel($"[green]Result:[/] {Markup.Escape(result)}")
+                    .Header("Email Task Complete")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Green));
+
+            // Display token usage stats if using Response API
+            if (useResponseApi && responseApiReasoner != null)
+            {
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(
+                    new Panel($"[aqua]{responseApiReasoner.CurrentSessionStats}[/]")
+                        .Header("Token Usage Statistics")
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Aqua));
+            }
+        });
     }
 
     /// <summary>
@@ -380,81 +392,80 @@ class Program
     /// </summary>
     private static async Task RunCustomerSupportWorkflowExample()
     {
-        // **Initialize a fresh StateManager instance for this scenario execution**
-        StateManager.Start();
-
-        var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
-        AnsiConsole.Write(
-            new Panel($"[bold orange1]🧪 Test 3: Customer Support Workflow[/]\n[dim]Using: {reasonerType}[/]")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Orange1));
-
         var supportRequest = """
         A customer john.smith@example.com contacted us saying they want to purchase a gaming laptop and it is entiled to a discount
         1. Check if they're in our customer database
         2. Send them information about our gaming laptop using 20% discount if existing customers, 10% if it is a new ones)
         """;
-
-        AnsiConsole.MarkupLine("[dim]Support Request:[/]");
-        AnsiConsole.Write(
-            new Panel(supportRequest)
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Grey));
-
-        var result = await AnsiConsole.Status()
-            .StartAsync("[orange1]Processing support workflow...[/]", async ctx =>
-            {
-                return await ExecuteReasoningTask(supportRequest);
-            });
-
-        AnsiConsole.Write(
-            new Panel($"[green]Final Result:[/] {Markup.Escape(result)}")
-                .Header("Customer Support Workflow Complete")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Green));
-
-        // Display token usage stats if using Response API
-        if (useResponseApi && responseApiReasoner != null)
+        await RunScenarioAsync("Customer Support Workflow", supportRequest, async () =>
         {
+            var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
+            AnsiConsole.Write(
+                new Panel($"[bold orange1]🧪 Test 3: Customer Support Workflow[/]\n[dim]Using: {reasonerType}[/]")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Orange1));
+
+            AnsiConsole.MarkupLine("[dim]Support Request:[/]");
+            AnsiConsole.Write(
+                new Panel(supportRequest)
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Grey));
+
+            var result = await AnsiConsole.Status()
+                .StartAsync("[orange1]Processing support workflow...[/]", async ctx =>
+                {
+                    return await ExecuteReasoningTask(supportRequest);
+                });
+
+            AnsiConsole.Write(
+                new Panel($"[green]Final Result:[/] {Markup.Escape(result)}")
+                    .Header("Customer Support Workflow Complete")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Green));
+
+            // Display token usage stats if using Response API
+            if (useResponseApi && responseApiReasoner != null)
+            {
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(
+                    new Panel($"[aqua]{responseApiReasoner.CurrentSessionStats}[/]")
+                        .Header("Token Usage Statistics")
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Aqua));
+            }
+
+            // Show conversation log for this complex example
             AnsiConsole.WriteLine();
             AnsiConsole.Write(
-                new Panel($"[aqua]{responseApiReasoner.CurrentSessionStats}[/]")
-                    .Header("Token Usage Statistics")
+                new Rule("[bold blue]Conversation Log[/]")
+                    .RuleStyle("blue"));
+
+            // Display key benefits
+            AnsiConsole.WriteLine();
+            var benefits = useResponseApi
+                ? """
+                [bold green]Direct OpenAI API Benefits:[/]
+                • [yellow]Lower Overhead:[/] Bypasses Semantic Kernel abstraction layer
+                • [yellow]Token Tracking:[/] Detailed per-step and cumulative token statistics
+                • [yellow]Direct Control:[/] Full access to OpenAI Chat Completion options
+                • [yellow]Same Pattern:[/] Compatible interface with SchemaGuidedReasoner
+                • [yellow]Performance:[/] Potentially faster without SK middleware
+                """
+                : """
+                [bold green]Key Benefits Demonstrated:[/]
+                • [yellow]Structured Thinking:[/] LLM breaks down complex tasks into steps
+                • [yellow]Type Safety:[/] Strongly typed schemas prevent malformed tool calls
+                • [yellow]Predictable Behavior:[/] Consistent reasoning patterns
+                • [yellow]Easy Debugging:[/] Clear conversation logs
+                • [yellow]Extensible:[/] Easy to add new tools and reasoning patterns
+                """;
+
+            AnsiConsole.Write(
+                new Panel(benefits)
+                    .Header("Schema-Guided Reasoning Benefits")
                     .Border(BoxBorder.Rounded)
-                    .BorderColor(Color.Aqua));
-        }
-
-        // Show conversation log for this complex example
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(
-            new Rule("[bold blue]Conversation Log[/]")
-                .RuleStyle("blue"));
-
-        // Display key benefits
-        AnsiConsole.WriteLine();
-        var benefits = useResponseApi
-            ? """
-            [bold green]Direct OpenAI API Benefits:[/]
-            • [yellow]Lower Overhead:[/] Bypasses Semantic Kernel abstraction layer
-            • [yellow]Token Tracking:[/] Detailed per-step and cumulative token statistics
-            • [yellow]Direct Control:[/] Full access to OpenAI Chat Completion options
-            • [yellow]Same Pattern:[/] Compatible interface with SchemaGuidedReasoner
-            • [yellow]Performance:[/] Potentially faster without SK middleware
-            """
-            : """
-            [bold green]Key Benefits Demonstrated:[/]
-            • [yellow]Structured Thinking:[/] LLM breaks down complex tasks into steps
-            • [yellow]Type Safety:[/] Strongly typed schemas prevent malformed tool calls
-            • [yellow]Predictable Behavior:[/] Consistent reasoning patterns
-            • [yellow]Easy Debugging:[/] Clear conversation logs
-            • [yellow]Extensible:[/] Easy to add new tools and reasoning patterns
-            """;
-
-        AnsiConsole.Write(
-            new Panel(benefits)
-                .Header("Schema-Guided Reasoning Benefits")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Green));
+                    .BorderColor(Color.Green));
+        });
     }
 
     /// <summary>
@@ -464,48 +475,47 @@ class Program
     /// </summary>
     private static async Task RunSqlExample(string userRequest)
     {
-        // **Initialize a fresh StateManager instance for this scenario execution**
-        StateManager.Start();
-
-        var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
-        AnsiConsole.Write(
-            new Panel($"[bold aqua]🧪 Test 4: SQL Database + Excel Export[/]\n[dim]Using: {reasonerType}[/]")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Aqua));
-
-        AnsiConsole.MarkupLine("[yellow]Creating specialized reasoner with SQL and Excel functions only...[/]");
-        AnsiConsole.WriteLine();
-
-        // **Create a specialized reasoner that contains only SQL and Excel export functions**
-        // This demonstrates how to compose custom reasoners for specific workflows
-        var apiKey = GetRequiredSetting("OPENAI_API_KEY");
-        var endpoint = GetRequiredSetting("AZURE_ENDPOINT");
-        var deploymentId = "gpt-5-nano";
-        var databaseService = new DatabaseService();
-        var sqlServerService = new SqlServerService();
-
-        // **Define the specific tool types for SQL workflow**
-        var sqlToolTypes = new Type[]
+        await RunScenarioAsync("SQL Database + Excel Export", userRequest, async () =>
         {
-            typeof(ReportTaskCompletionToolCall),
-            typeof(GetDatabaseNamesFromServerToolCall),
-            typeof(GetSqlDatabaseSchemaToolCall),
-            typeof(ExecuteSqlQueryToolCall),
-            typeof(ExportSqlQueryResultToolCall)
-        };
+            var reasonerType = useResponseApi ? "Direct OpenAI API" : "Semantic Kernel";
+            AnsiConsole.Write(
+                new Panel($"[bold aqua]🧪 Test 4: SQL Database + Excel Export[/]\n[dim]Using: {reasonerType}[/]")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Aqua));
 
-        // **Create a specialized BusinessFunctionFactory with only SQL-related functions**
-        var loggerFactory = kernel!.Services.GetRequiredService<ILoggerFactory>();
-        var sqlFunctionFactory = new BusinessFunctionFactory(databaseService, sqlServerService, kernel, loggerFactory, sqlToolTypes);
+            AnsiConsole.MarkupLine("[yellow]Creating specialized reasoner with SQL and Excel functions only...[/]");
+            AnsiConsole.WriteLine();
 
-        // **Create custom options for SQL workflow**
-        var sqlOptions = new SchemaGuidedReasonerOptions
-        {
-            JsonSerializerOptions = SchemaGuidedReasonerOptions.CreateDefaultJsonOptions(),
-            SystemPromptBuilder = (context, _) =>
+            // **Create a specialized reasoner that contains only SQL and Excel export functions**
+            // This demonstrates how to compose custom reasoners for specific workflows
+            var apiKey = GetRequiredSetting("OPENAI_API_KEY");
+            var endpoint = GetRequiredSetting("AZURE_ENDPOINT");
+            var deploymentId = "gpt-5-nano";
+            var databaseService = new DatabaseService();
+            var sqlServerService = new SqlServerService();
+
+            // **Define the specific tool types for SQL workflow**
+            var sqlToolTypes = new Type[]
             {
-                var toolsSummary = SchemaGuidedReasoner.GenerateToolsSummary(context.Schema.AvailableTools);
-                return $@"You are a SQL data analyst assistant.
+                typeof(ReportTaskCompletionToolCall),
+                typeof(GetDatabaseNamesFromServerToolCall),
+                typeof(GetSqlDatabaseSchemaToolCall),
+                typeof(ExecuteSqlQueryToolCall),
+                typeof(ExportSqlQueryResultToolCall)
+            };
+
+            // **Create a specialized BusinessFunctionFactory with only SQL-related functions**
+            var loggerFactory = kernel!.Services.GetRequiredService<ILoggerFactory>();
+            var sqlFunctionFactory = new BusinessFunctionFactory(databaseService, sqlServerService, kernel, loggerFactory, sqlToolTypes);
+
+            // **Create custom options for SQL workflow**
+            var sqlOptions = new SchemaGuidedReasonerOptions
+            {
+                JsonSerializerOptions = SchemaGuidedReasonerOptions.CreateDefaultJsonOptions(),
+                SystemPromptBuilder = (context, _) =>
+                {
+                    var toolsSummary = SchemaGuidedReasoner.GenerateToolsSummary(context.Schema.AvailableTools);
+                    return $@"You are a SQL data analyst assistant.
 
 IMPORTANT: You must always respond with structured JSON that includes:
 1. Current state analysis
@@ -529,84 +539,116 @@ IMPORTANT: You must always respond with structured JSON that includes:
 - When there are not anymore steps to execute, you can use the ReportTaskCompletion function to report the final result to the user. Tell if the process was successful or not.
 
 ";
-            }
-        };
-
-        AnsiConsole.MarkupLine("[dim]User Request:[/]");
-        AnsiConsole.Write(
-            new Panel(userRequest)
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Grey));
-
-        string result;
-        if (useResponseApi)
-        {
-            // **Create specialized Response API reasoner**
-            var sqlReasoner = new ResponseApiSchemaGuidedReasoner(
-                azureEndpoint: endpoint,
-                azureApiKey: apiKey,
-                deploymentId: deploymentId,
-                businessFunctionFactory: sqlFunctionFactory,
-                options: sqlOptions)
-            {
-                VerboseOutput = responseApiReasoner!.VerboseOutput,
-#pragma warning disable OPENAI001
-                ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
-#pragma warning restore OPENAI001
+                }
             };
 
-            result = await AnsiConsole.Status()
-                .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
-                {
-                    return await sqlReasoner.ReasonAndActAsync(userRequest);
-                });
+            AnsiConsole.MarkupLine("[dim]User Request:[/]");
+            AnsiConsole.Write(
+                new Panel(userRequest)
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Grey));
 
-            // Display token usage stats
+            string result;
+            if (useResponseApi)
+            {
+                // **Create specialized Response API reasoner**
+                var sqlReasoner = new ResponseApiSchemaGuidedReasoner(
+                    azureEndpoint: endpoint,
+                    azureApiKey: apiKey,
+                    deploymentId: deploymentId,
+                    businessFunctionFactory: sqlFunctionFactory,
+                    options: sqlOptions,
+                    logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiSchemaGuidedReasoner>())
+                {
+                    VerboseOutput = responseApiReasoner!.VerboseOutput,
+#pragma warning disable OPENAI001
+                    ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
+#pragma warning restore OPENAI001
+                };
+
+                result = await AnsiConsole.Status()
+                    .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
+                    {
+                        return await sqlReasoner.ReasonAndActAsync(userRequest);
+                    });
+
+                // Display token usage stats
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(
+                    new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
+                        .Header("Token Usage Statistics")
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Aqua));
+            }
+            else
+            {
+                // **Create specialized Semantic Kernel reasoner**
+                var sqlReasoner = new SchemaGuidedReasoner(
+                    kernel!,
+                    sqlFunctionFactory,
+                    sqlOptions)
+                {
+                    VerboseOutput = reasoner!.VerboseOutput
+                };
+
+                result = await AnsiConsole.Status()
+                    .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
+                    {
+                        return await sqlReasoner.ReasonAndActAsync(userRequest);
+                    });
+            }
+
+            AnsiConsole.Write(
+                new Panel($"[green]Final Result:[/] {Markup.Escape(result)}")
+                    .Header("SQL + Excel Workflow Complete")
+                    .Border(BoxBorder.Rounded)
+                    .BorderColor(Color.Green));
+
+            // Show benefits of specialized reasoners
             AnsiConsole.WriteLine();
             AnsiConsole.Write(
-                new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
-                    .Header("Token Usage Statistics")
+                new Panel("""
+                [bold green]Specialized Reasoner Benefits:[/]
+                • [yellow]Focused Context:[/] Only SQL and Excel tools available, reducing complexity
+                • [yellow]Custom Prompts:[/] Tailored system prompt for SQL workflow
+                • [yellow]Type Safety:[/] Strongly typed SQL and Excel function calls
+                • [yellow]Composability:[/] Easy to create domain-specific reasoners
+                • [yellow]Multi-step Workflow:[/] Automatic orchestration of database discovery, querying, and export
+                """)
+                    .Header("Specialized SQL Reasoner")
                     .Border(BoxBorder.Rounded)
-                    .BorderColor(Color.Aqua));
-        }
-        else
+                    .BorderColor(Color.Green));
+        });
+    }
+
+    private static async Task RunScenarioAsync(string scenarioName, string? userRequest, Func<Task> scenarioBody)
+    {
+        StateManager.Start();
+
+        using var scenarioActivity = SgrTelemetry.StartScenarioActivity(
+            scenarioName,
+            useResponseApi ? "response-api" : "semantic-kernel",
+            userRequest);
+
+        var traceId = scenarioActivity?.TraceId.ToString();
+        AnsiConsole.MarkupLine($"[grey]TraceId:[/] {traceId ?? "not available"}");
+        logger?.LogInformation("Starting scenario {ScenarioName} with trace id {TraceId}", scenarioName, traceId);
+
+        try
         {
-            // **Create specialized Semantic Kernel reasoner**
-            var sqlReasoner = new SchemaGuidedReasoner(
-                kernel!,
-                sqlFunctionFactory,
-                sqlOptions)
-            {
-                VerboseOutput = reasoner!.VerboseOutput
-            };
-
-            result = await AnsiConsole.Status()
-                .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
-                {
-                    return await sqlReasoner.ReasonAndActAsync(userRequest);
-                });
+            await scenarioBody();
+            logger?.LogInformation("Scenario {ScenarioName} completed", scenarioName);
         }
-
-        AnsiConsole.Write(
-            new Panel($"[green]Final Result:[/] {Markup.Escape(result)}")
-                .Header("SQL + Excel Workflow Complete")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Green));
-
-        // Show benefits of specialized reasoners
-        AnsiConsole.WriteLine();
-        AnsiConsole.Write(
-            new Panel("""
-            [bold green]Specialized Reasoner Benefits:[/]
-            • [yellow]Focused Context:[/] Only SQL and Excel tools available, reducing complexity
-            • [yellow]Custom Prompts:[/] Tailored system prompt for SQL workflow
-            • [yellow]Type Safety:[/] Strongly typed SQL and Excel function calls
-            • [yellow]Composability:[/] Easy to create domain-specific reasoners
-            • [yellow]Multi-step Workflow:[/] Automatic orchestration of database discovery, querying, and export
-            """)
-                .Header("Specialized SQL Reasoner")
-                .Border(BoxBorder.Rounded)
-                .BorderColor(Color.Green));
+        catch (Exception ex)
+        {
+            SgrTelemetry.MarkError(scenarioActivity, ex);
+            logger?.LogError(ex, "Scenario {ScenarioName} failed", scenarioName);
+            throw;
+        }
+        finally
+        {
+            StateManager.Clear();
+        }
     }
 
     private static string GetRequiredSetting(string key)
