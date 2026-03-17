@@ -6,6 +6,7 @@ using Alkampfer.Sgr.Services;
 using Alkampfer.Sgr.Telemetry;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Diagnostics;
 
 namespace Alkampfer.Sgr.Runtime;
 
@@ -274,6 +275,7 @@ public class BusinessFunctionFactory
 
         using var toolActivity = SgrTelemetry.StartToolCall(toolName, toolCall);
         toolActivity?.SetTag("sgr.tool.handler", businessFunction.GetType().Name);
+        var stopwatch = Stopwatch.StartNew();
 
         _logger.LogInformation(
             "Dispatching tool {ToolName} with handler {HandlerName}",
@@ -283,7 +285,9 @@ public class BusinessFunctionFactory
         try
         {
             var result = await businessFunction.ExecuteAsync(toolCall, cancellationToken).ConfigureAwait(false);
+            stopwatch.Stop();
             SgrTelemetry.RecordToolResult(toolActivity, result.Summary);
+            SgrTelemetry.RecordToolCompleted(toolActivity, toolName, stopwatch.Elapsed);
 
             _logger.LogInformation(
                 "Tool {ToolName} completed with summary {Summary}",
@@ -294,6 +298,8 @@ public class BusinessFunctionFactory
         }
         catch (Exception ex)
         {
+            stopwatch.Stop();
+            SgrTelemetry.RecordToolFailed(toolActivity, toolName, stopwatch.Elapsed);
             SgrTelemetry.MarkError(toolActivity, ex);
             _logger.LogError(ex, "Tool {ToolName} failed", toolName);
             throw;

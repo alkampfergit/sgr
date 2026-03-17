@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -14,12 +15,18 @@ internal sealed class PlaygroundTelemetry : IDisposable
     private const string DefaultOtlpEndpoint = "http://localhost:4317";
     private const string ServiceName = "Alkampfer.Sgr.Playground";
 
+    private readonly MeterProvider _meterProvider;
     private readonly TracerProvider _tracerProvider;
 
-    private PlaygroundTelemetry(ILoggerFactory loggerFactory, TracerProvider tracerProvider, string otlpEndpoint)
+    private PlaygroundTelemetry(
+        ILoggerFactory loggerFactory,
+        TracerProvider tracerProvider,
+        MeterProvider meterProvider,
+        string otlpEndpoint)
     {
         LoggerFactory = loggerFactory;
         _tracerProvider = tracerProvider;
+        _meterProvider = meterProvider;
         OtlpEndpoint = otlpEndpoint;
     }
 
@@ -85,11 +92,22 @@ internal sealed class PlaygroundTelemetry : IDisposable
             })
             .Build();
 
-        return new PlaygroundTelemetry(loggerFactory, tracerProvider, endpoint);
+        var meterProvider = Sdk.CreateMeterProviderBuilder()
+            .SetResourceBuilder(resourceBuilder)
+            .AddMeter(SgrTelemetry.MeterName)
+            .AddOtlpExporter(exporter =>
+            {
+                exporter.Endpoint = new Uri(endpoint);
+                exporter.Protocol = OtlpExportProtocol.Grpc;
+            })
+            .Build();
+
+        return new PlaygroundTelemetry(loggerFactory, tracerProvider, meterProvider, endpoint);
     }
 
     public void Dispose()
     {
+        _meterProvider.Dispose();
         _tracerProvider.Dispose();
         LoggerFactory.Dispose();
     }

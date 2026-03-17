@@ -199,6 +199,8 @@ public class ResponseApiSchemaGuidedReasoner
         {
             using var stepActivity = SgrTelemetry.StartPlanningStep("response-api", step);
             stepActivity?.SetTag("sgr.executed_task_count", executionTaskResult.Count);
+            Stopwatch? llmStopwatch = null;
+            Activity? modelActivity = null;
 
             if (VerboseOutput)
             {
@@ -265,18 +267,22 @@ public class ResponseApiSchemaGuidedReasoner
                     },
                 };
 
-                using var modelActivity = SgrTelemetry.StartModelCall(
+                modelActivity = SgrTelemetry.StartModelCall(
                     provider: "azure-openai-response-api",
                     model: _deploymentId,
                     systemPrompt: systemPrompt,
                     userPrompt: dumpAllPrompt,
                     schema: schemaStr);
+                SgrTelemetry.RecordLlmCallStarted("azure-openai-response-api", _deploymentId);
+                llmStopwatch = Stopwatch.StartNew();
 
                 _logger.LogInformation("Requesting next reasoning step from the Azure OpenAI Response API.");
                 _logger.LogDebug("Response API system prompt: {SystemPrompt}", systemPrompt);
                 _logger.LogDebug("Response API prompt payload: {PromptPayload}", dumpAllPrompt);
 
                 OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
+                llmStopwatch.Stop();
+                SgrTelemetry.RecordLlmCallCompleted(modelActivity, llmStopwatch.Elapsed);
 
                 // conversationId = response.Id;
 
@@ -410,6 +416,12 @@ public class ResponseApiSchemaGuidedReasoner
             }
             catch (Exception ex)
             {
+                if (llmStopwatch?.IsRunning == true)
+                {
+                    llmStopwatch.Stop();
+                    SgrTelemetry.RecordLlmCallFailed(modelActivity, llmStopwatch.Elapsed);
+                }
+
                 SgrTelemetry.MarkError(stepActivity, ex);
                 SgrTelemetry.MarkError(executionActivity, ex);
                 _logger.LogError(ex, "Response API reasoning failed at step {Step}", step);
