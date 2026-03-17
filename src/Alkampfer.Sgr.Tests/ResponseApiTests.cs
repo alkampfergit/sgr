@@ -21,10 +21,10 @@ namespace Alkampfer.Sgr.Tests;
 ///
 /// This test class validates the new Azure OpenAI Response API functionality.
 /// The Response API is a newer, more direct way to interact with OpenAI models
-/// without the Semantic Kernel abstraction layer.
+/// without an additional orchestration framework layer.
 ///
 /// Key features of the Response API:
-/// - **Direct API Access**: No Semantic Kernel overhead
+/// - **Direct API Access**: Minimal client-side overhead
 /// - **Reasoning Capabilities**: Built-in support for extended reasoning with tracking
 /// - **Conversation Continuity**: PreviousResponseId for maintaining context
 /// - **Detailed Token Metrics**: Tracks input, output, reasoning, and cached tokens
@@ -37,10 +37,10 @@ namespace Alkampfer.Sgr.Tests;
 /// - Reasoning capabilities integration
 /// </summary>
 [TestFixture]
-public class ResponseApiTests : SemanticKernelTestBase
+public class ResponseApiTests
 {
     /// <summary>
-    /// **Real LLM test using the new OpenAI Response API directly (without Semantic Kernel)**
+    /// **Real LLM test using the OpenAI Response API directly**
     ///
     /// This test validates NextStep schema generation using the new Azure OpenAI Response API.
     /// The Response API provides:

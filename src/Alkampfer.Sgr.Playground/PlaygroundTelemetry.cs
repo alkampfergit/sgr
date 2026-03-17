@@ -45,7 +45,6 @@ internal sealed class PlaygroundTelemetry : IDisposable
         var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Information);
-            builder.AddFilter("Microsoft.SemanticKernel", LogLevel.Warning);
             builder.AddFilter("Microsoft.Extensions.Http", LogLevel.Warning);
             builder.Configure(options =>
             {

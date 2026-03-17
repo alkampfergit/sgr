@@ -18,7 +18,7 @@ namespace Alkampfer.Sgr.Tests;
 /// - **Description Inheritance**: Tests description handling in polymorphic hierarchies
 /// </summary>
 [TestFixture]
-public class PolymorphicSchemaManagerDescriptionTests : SemanticKernelTestBase
+public class PolymorphicSchemaManagerDescriptionTests
 {
     /// <summary>
     /// **Test base class with description for polymorphic testing**
