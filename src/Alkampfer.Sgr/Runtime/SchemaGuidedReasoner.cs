@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.OpenAI;
@@ -7,7 +9,9 @@ using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.Utils;
 using Alkampfer.Sgr.Services;
+using Alkampfer.Sgr.Telemetry;
 using Spectre.Console;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
@@ -39,6 +43,7 @@ public class SchemaGuidedReasoner
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly BusinessFunctionFactory _functionFactory;
     private readonly SchemaGuidedReasonerOptions _options;
+    private readonly ILogger<SchemaGuidedReasoner> _logger;
 
     /// <summary>
     /// Controls whether to display detailed debug output during reasoning.
@@ -54,13 +59,15 @@ public class SchemaGuidedReasoner
     public SchemaGuidedReasoner(
         IChatCompletionService chatService,
         BusinessFunctionFactory businessFunctionFactory,
-        SchemaGuidedReasonerOptions? options = null)
+        SchemaGuidedReasonerOptions? options = null,
+        ILogger<SchemaGuidedReasoner>? logger = null)
     {
         _chatService = chatService ?? throw new ArgumentNullException(nameof(chatService));
         _functionFactory = businessFunctionFactory ?? throw new ArgumentNullException(nameof(businessFunctionFactory));
 
         _options = options ?? SchemaGuidedReasonerOptions.CreateDefault();
         _jsonOptions = _options.JsonSerializerOptions ?? SchemaGuidedReasonerOptions.CreateDefaultJsonOptions();
+        _logger = logger ?? NullLogger<SchemaGuidedReasoner>.Instance;
     }
 
     /// <summary>
@@ -73,7 +80,8 @@ public class SchemaGuidedReasoner
         : this(
             kernel?.GetRequiredService<IChatCompletionService>() ?? throw new ArgumentNullException(nameof(kernel)),
             businessFunctionFactory,
-            options)
+            options,
+            kernel.Services.GetService<ILogger<SchemaGuidedReasoner>>() ?? NullLogger<SchemaGuidedReasoner>.Instance)
     {
     }
 
@@ -148,11 +156,16 @@ public class SchemaGuidedReasoner
     /// </summary>
     public async Task<string> ReasonAndActAsync(string userRequest)
     {
+        using var executionActivity = SgrTelemetry.StartReasonerExecution("semantic-kernel", userRequest);
         var executionTaskResult = new List<ToolExecutionResult>();
+        _logger.LogInformation("Starting Semantic Kernel SGR execution.");
 
         // Limit reasoning steps to prevent infinite loops (matching Python original)
         for (int step = 1; step <= 20; step++)
         {
+            using var stepActivity = SgrTelemetry.StartPlanningStep("semantic-kernel", step);
+            stepActivity?.SetTag("sgr.executed_task_count", executionTaskResult.Count);
+
             if (VerboseOutput)
             {
                 AnsiConsole.Write($"[yellow]Planning step_{step}...[/] ");
@@ -215,6 +228,7 @@ public class SchemaGuidedReasoner
 
                 if (nextStep.Function is ReportTaskCompletionToolCall completionParameter)
                 {
+                    _logger.LogInformation("Semantic Kernel SGR execution completed: {Summary}", completionParameter.Summary);
                     if (VerboseOutput)
                     {
                         AnsiConsole.MarkupLine($"[blue]Task completed: {Markup.Escape(completionParameter.Summary)}[/]");
@@ -229,7 +243,7 @@ public class SchemaGuidedReasoner
                 }
 
                 // Manually dispatch the tool function
-                var businessResult = await _functionFactory.DispatchToolFunction(nextStep.Function);
+                var businessResult = await _functionFactory.DispatchToolFunction(nextStep.Function).ConfigureAwait(false);
 
                 // Add execution result to the list for next iteration
                 var resultSummary = businessResult.Summary;
@@ -248,6 +262,9 @@ public class SchemaGuidedReasoner
             }
             catch (Exception ex)
             {
+                SgrTelemetry.MarkError(stepActivity, ex);
+                SgrTelemetry.MarkError(executionActivity, ex);
+                _logger.LogError(ex, "Semantic Kernel reasoning failed at step {Step}", step);
                 // Use WriteLine to avoid markup parsing issues with exception messages
                 AnsiConsole.Write("[red]Error in reasoning step ");
                 AnsiConsole.Write(step.ToString());
@@ -304,11 +321,24 @@ public class SchemaGuidedReasoner
             ResponseFormat = chatResponseFormat
         };
 
-        var response = await _chatService.GetChatMessageContentAsync(chatHistory, executionSettings);
+        using var modelActivity = SgrTelemetry.StartModelCall(
+            provider: "azure-openai",
+            model: "semantic-kernel-chat-completion",
+            systemPrompt: systemPrompt,
+            userPrompt: userMessage,
+            schema: schemaStr);
+
+        _logger.LogInformation("Requesting next reasoning step from Semantic Kernel.");
+        _logger.LogDebug("Semantic Kernel system prompt: {SystemPrompt}", systemPrompt);
+        _logger.LogDebug("Semantic Kernel user prompt: {UserPrompt}", userMessage);
+
+        var response = await _chatService.GetChatMessageContentAsync(chatHistory, executionSettings).ConfigureAwait(false);
 
         // Parse the JSON response to NextStep object
         var openAIResponse = (OpenAIChatMessageContent)response;
         var jsonContent = openAIResponse.Content ?? string.Empty;
+        SgrTelemetry.RecordModelResponse(modelActivity, jsonContent);
+        _logger.LogDebug("Semantic Kernel assistant response: {AssistantResponse}", jsonContent);
 
         var nextStep = _functionFactory.DeserializeNextStep(jsonContent);
         if (nextStep == null)
