@@ -1,11 +1,13 @@
 #pragma warning disable OPENAI001
 
+using Azure;
+using Azure.AI.OpenAI;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Services;
+using Alkampfer.Sgr.Runtime;
+using OpenAI.Responses;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
@@ -21,7 +23,7 @@ namespace Alkampfer.Sgr.BusinessFunctions;
 /// When `SqlQuery` is provided, the query is executed directly against the database.
 ///
 /// **2. Natural Language to T-SQL Translation:**
-/// When `QueryDescription` is provided instead of `SqlQuery`, the function uses the Semantic Kernel
+/// When `QueryDescription` is provided instead of `SqlQuery`, the function uses Azure OpenAI directly
 /// to translate the natural language description into a T-SQL query. The translation process:
 /// - Retrieves the database schema from the state manager (if available)
 /// - Uses the schema as context for the LLM to generate accurate queries
@@ -36,7 +38,7 @@ namespace Alkampfer.Sgr.BusinessFunctions;
 public sealed class ExecuteSqlQueryFunction : BusinessFunction<ExecuteSqlQueryToolCall>
 {
     private readonly SqlServerService _sqlServerService;
-    private readonly Kernel _kernel;
+    private readonly AzureOpenAiConfiguration _openAiConfiguration;
     private readonly ILogger<ExecuteSqlQueryFunction> _logger;
 
     /// <summary>
@@ -51,11 +53,11 @@ public sealed class ExecuteSqlQueryFunction : BusinessFunction<ExecuteSqlQueryTo
 
     public ExecuteSqlQueryFunction(
         SqlServerService sqlServerService,
-        Kernel kernel,
+        AzureOpenAiConfiguration openAiConfiguration,
         ILogger<ExecuteSqlQueryFunction> logger)
     {
         _sqlServerService = sqlServerService;
-        _kernel = kernel;
+        _openAiConfiguration = openAiConfiguration;
         _logger = logger;
     }
 
@@ -140,7 +142,7 @@ public sealed class ExecuteSqlQueryFunction : BusinessFunction<ExecuteSqlQueryTo
     }
 
     /// <summary>
-    /// Translates a natural language query description into a T-SQL query using the Semantic Kernel.
+    /// Translates a natural language query description into a T-SQL query using Azure OpenAI directly.
     /// </summary>
     /// <param name="databaseName">The target database name.</param>
     /// <param name="queryDescription">Natural language description of the desired query.</param>
@@ -236,17 +238,29 @@ Query Description: {queryDescription}
 
 Generate the T-SQL query:";
 
-        // Use the chat completion service to generate the query
-        var chatService = _kernel.GetRequiredService<IChatCompletionService>();
-        var chatHistory = new ChatHistory();
-        chatHistory.AddSystemMessage(systemPrompt);
-        chatHistory.AddUserMessage(userMessage);
+        var clientOptions = new AzureOpenAIClientOptions(
+            AzureOpenAIClientOptions.ServiceVersion.V2025_04_01_Preview);
 
-        var response = await chatService.GetChatMessageContentAsync(
-            chatHistory,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var client = new AzureOpenAIClient(
+            new Uri(_openAiConfiguration.Endpoint),
+            new AzureKeyCredential(_openAiConfiguration.ApiKey),
+            clientOptions);
 
-        var generatedSql = response.Content?.Trim() ?? string.Empty;
+        var responseClient = client.GetOpenAIResponseClient(_openAiConfiguration.DeploymentId);
+        var response = await responseClient.CreateResponseAsync(
+            [
+                ResponseItem.CreateSystemMessageItem(systemPrompt),
+                ResponseItem.CreateUserMessageItem(userMessage)
+            ],
+            new ResponseCreationOptions(),
+            cancellationToken).ConfigureAwait(false);
+
+        var generatedSql = response.Value.OutputItems
+            .OfType<MessageResponseItem>()
+            .SelectMany(message => message.Content)
+            .Select(content => content.Text)
+            .FirstOrDefault(static text => !string.IsNullOrWhiteSpace(text))
+            ?.Trim() ?? string.Empty;
 
         // Clean up any markdown code blocks that might have been included
         generatedSql = CleanSqlQuery(generatedSql);
@@ -289,7 +303,7 @@ Generate the T-SQL query:";
 ///
 /// **Mode 2: Natural Language Query** (provide `QueryDescription`)
 /// - Translates a natural language description into T-SQL
-/// - Uses the Semantic Kernel LLM to generate the query
+/// - Uses Azure OpenAI directly to generate the query
 /// - Automatically includes database schema context if available
 /// - Useful for generating queries from user requests
 ///

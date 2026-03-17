@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Utils;
@@ -56,7 +55,7 @@ public class BusinessFunctionFactory
     private readonly PolymorphicSchemaManager<NextStep, ToolCall> _schemaManager;
     private readonly DatabaseService _databaseService;
     private readonly SqlServerService _sqlServerService;
-    private readonly Kernel _kernel;
+    private readonly AzureOpenAiConfiguration _openAiConfiguration;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<BusinessFunctionFactory> _logger;
 
@@ -69,19 +68,19 @@ public class BusinessFunctionFactory
     /// </summary>
     /// <param name="databaseService">Database service instance for all functions</param>
     /// <param name="sqlServerService">SQL Server service instance for SQL-related functions</param>
-    /// <param name="kernel">Semantic Kernel instance for LLM operations</param>
+    /// <param name="openAiConfiguration">Azure OpenAI configuration used by LLM-backed business functions</param>
     /// <param name="loggerFactory">Logger factory for creating typed loggers</param>
     /// <param name="toolCallTypes">Array of ToolCall types to include in the factory. If null or empty, includes all available types.</param>
     public BusinessFunctionFactory(
         DatabaseService databaseService,
         SqlServerService sqlServerService,
-        Kernel kernel,
+        AzureOpenAiConfiguration openAiConfiguration,
         ILoggerFactory loggerFactory,
         Type[] toolCallTypes)
     {
         _databaseService = databaseService ?? throw new ArgumentNullException(nameof(databaseService));
         _sqlServerService = sqlServerService ?? throw new ArgumentNullException(nameof(sqlServerService));
-        _kernel = kernel ?? throw new ArgumentNullException(nameof(kernel));
+        _openAiConfiguration = openAiConfiguration ?? throw new ArgumentNullException(nameof(openAiConfiguration));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _logger = loggerFactory.CreateLogger<BusinessFunctionFactory>();
         if (toolCallTypes?.Any() != true)
@@ -193,7 +192,7 @@ public class BusinessFunctionFactory
     ///
     /// This method uses reflection to create instances of BusinessFunction types,
     /// analyzing their constructor parameters and providing the appropriate dependencies
-    /// (DatabaseService, SqlServerService, Kernel, ILogger, or no dependencies).
+    /// (DatabaseService, SqlServerService, AzureOpenAiConfiguration, ILogger, or no dependencies).
     /// </summary>
     /// <param name="businessFunctionType">The BusinessFunction type to instantiate</param>
     /// <returns>An instance of the BusinessFunction</returns>
@@ -222,9 +221,9 @@ public class BusinessFunctionFactory
             {
                 args[i] = _sqlServerService;
             }
-            else if (paramType == typeof(Kernel))
+            else if (paramType == typeof(AzureOpenAiConfiguration))
             {
-                args[i] = _kernel;
+                args[i] = _openAiConfiguration;
             }
             else if (paramType.IsGenericType && paramType.GetGenericTypeDefinition() == typeof(ILogger<>))
             {

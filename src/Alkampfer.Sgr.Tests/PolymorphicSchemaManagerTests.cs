@@ -1,6 +1,3 @@
-using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
-using OpenAI.Chat;
 using Alkampfer.Sgr.Utils;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -23,7 +20,7 @@ namespace Alkampfer.Sgr.Tests;
 /// - **Generic Functionality**: Tests the reflection-based property detection
 /// </summary>
 [TestFixture]
-public class PolymorphicSchemaManagerTests : SemanticKernelTestBase
+public class PolymorphicSchemaManagerTests
 {
     private PolymorphicSchemaManager<ActualNextStep, ActualToolCall> _manager = null!;
 
@@ -816,96 +813,4 @@ public class PolymorphicSchemaManagerTests : SemanticKernelTestBase
             "Should throw exception when no types are added");
     }
 
-    /// <summary>
-    /// **Real LLM test that validates schema generation and polymorphic deserialization with OpenAI**
-    /// 
-    /// This test mimics real-world usage by:
-    /// - Generating a schema using the generic manager
-    /// - Making an actual LLM call with structured output
-    /// - Verifying the response deserializes correctly to the expected polymorphic type
-    /// </summary>
-    [Test]
-    [Category("LLMIntegration")]
-    public async Task GenerateSchema_RealLLMCall_PolymorphicDeserialization()
-    {
-        // Skip test if no API key is available
-        var apiKey = Dotenv.Get("OPENAI_API_KEY");
-        var endpoint = Dotenv.Get("AZURE_ENDPOINT");
-        if (string.IsNullOrEmpty(apiKey) && string.IsNullOrEmpty(endpoint))
-        {
-            Assert.Ignore("Skipping LLM test - no API key or endpoint configured");
-        }
-
-        try
-        {
-            // **Arrange**: Generate schema and prepare LLM call
-            var schemaJson = _manager.GenerateSchema();
-            var completionService = GetCompletionService(apiKey, endpoint, schemaJson);
-
-            Console.WriteLine("Generated Schema:");
-            Console.WriteLine(schemaJson);
-
-            // **Act**: Make LLM call with structured output
-            var prompt = """
-                You need to process a customer order confirmation. The customer email is customer@example.com.
-                Create a next step that involves sending a confirmation email with subject "Order Confirmation #12345"
-                and message "Thank you for your order. Your items will be shipped soon."
-                
-                Current state should be "Preparing order confirmation"
-                Remaining steps should include: ["Send confirmation email", "Update order status"]
-                Task is not completed yet.
-
-                You need to answer in json to specify the next step to execute.
-                """;
-
-            var chatHistory = new ChatHistory();
-            chatHistory.AddUserMessage(prompt);
-
-
-            var chatResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
-                jsonSchemaFormatName: "next_step",
-                jsonSchema: BinaryData.FromString(schemaJson),
-                jsonSchemaIsStrict: true
-            );
-            var executionSettings = new OpenAIPromptExecutionSettings
-            {
-                ResponseFormat = chatResponseFormat,
-            };
-
-            var skResponse = await completionService.GetChatMessageContentAsync(chatHistory, executionSettings);
-            var responseContent = skResponse.Content;
-            Assert.That(responseContent, Is.Not.Null.And.Not.Empty, "LLM should return structured response");
-
-            Console.WriteLine("LLM Response:");
-            Console.WriteLine(responseContent);
-
-            // **Assert**: Deserialize and validate the response
-            var nextStep = _manager.DeserializeFromJson(responseContent!);
-            Assert.That(nextStep, Is.Not.Null, "Response should deserialize to NextStep");
-
-            Assert.That(nextStep!.CurrentState, Is.Not.Null.And.Not.Empty, "CurrentState should be populated");
-            Assert.That(nextStep.PlanRemainingStepsBrief, Is.Not.Null.And.Not.Empty, "PlanRemainingStepsBrief should be populated");
-            Assert.That(nextStep.TaskCompleted, Is.False, "TaskCompleted should be false as requested");
-            Assert.That(nextStep.Function, Is.InstanceOf<Alkampfer.Sgr.BusinessFunctions.SendEmailToolCall>(), "ToolCall should be SendEmailToolCall");
-
-            var sendEmailCall = nextStep.Function as Alkampfer.Sgr.BusinessFunctions.SendEmailToolCall;
-            Assert.That(sendEmailCall, Is.Not.Null, "Should be able to cast ToolCall to SendEmailToolCall");
-            Assert.That(sendEmailCall!.Subject, Is.Not.Null.And.Not.Empty, "Email subject should not be empty");
-            Assert.That(sendEmailCall.Message, Is.Not.Null.And.Not.Empty, "Email message should not be empty");
-            Assert.That(sendEmailCall.RecipientEmail, Is.Not.Null.And.Not.Empty, "Recipient email should not be empty");
-
-            Assert.That(sendEmailCall.Subject.ToLower(), Contains.Substring("confirmation").Or.Contains("order"), "Should extract order confirmation subject");
-            Assert.That(sendEmailCall.RecipientEmail.ToLower(), Contains.Substring("customer@example.com"), "Should extract recipient email");
-
-            Console.WriteLine($"✅ Successfully extracted NextStep: '{nextStep.CurrentState}' with SendEmailToolCall");
-            Console.WriteLine($"✅ Email details: '{sendEmailCall.Subject}' to '{sendEmailCall.RecipientEmail}'");
-            Console.WriteLine("✅ Generic polymorphic deserialization successful - ToolCall correctly identified as SendEmailToolCall");
-        }
-        catch (Exception ex)
-        {
-            Assert.Fail($"Failed to perform LLM call: {ex.Message}");
-        }
-
-        Console.WriteLine("✅ Real LLM call with generic polymorphic schema validation completed successfully!");
-    }
 }

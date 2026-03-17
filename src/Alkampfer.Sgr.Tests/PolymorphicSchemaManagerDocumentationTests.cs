@@ -17,7 +17,7 @@ namespace Alkampfer.Sgr.Tests;
 /// - **Comprehensive Integration**: Tests the complete documentation generation flow
 /// </summary>
 [TestFixture]
-public class PolymorphicSchemaManagerDocumentationTests : SemanticKernelTestBase
+public class PolymorphicSchemaManagerDocumentationTests
 {
     /// <summary>
     /// **Test tool container with detailed description**

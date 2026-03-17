@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Services;
 using Alkampfer.Sgr.Runtime;
@@ -22,7 +21,7 @@ namespace Alkampfer.Sgr.Tests;
 /// - **Future Extensibility**: Tests the foundation for context-aware tool selection
 /// </summary>
 [TestFixture]
-public class DynamicToolSelectionTests : SemanticKernelTestBase
+public class DynamicToolSelectionTests
 {
     private DatabaseService _databaseService = null!;
     private BusinessFunctionFactory _factory = null!;
@@ -37,14 +36,10 @@ public class DynamicToolSelectionTests : SemanticKernelTestBase
     public void Setup()
     {
         _databaseService = new DatabaseService();
-        var kernelBuilder = Kernel.CreateBuilder();
-        kernelBuilder.Services.AddLogging(l => l
-            .SetMinimumLevel(LogLevel.Warning)
-            .AddConsole()
-        );
-        var kernel = kernelBuilder.Build();
-        var loggerFactory = kernel.Services.GetRequiredService<ILoggerFactory>();
-        _factory = new BusinessFunctionFactory(_databaseService, new SqlServerService(), kernel, loggerFactory, new Type[]
+        var loggerFactory = LoggerFactory.Create(l => l
+            .SetMinimumLevel(LogLevel.Warning));
+        var openAiConfiguration = new AzureOpenAiConfiguration("https://example.openai.azure.com", "test-key", "test-deployment");
+        _factory = new BusinessFunctionFactory(_databaseService, new SqlServerService(), openAiConfiguration, loggerFactory, new Type[]
          {
             typeof(ReportTaskCompletionToolCall),
             typeof(SendEmailToolCall),

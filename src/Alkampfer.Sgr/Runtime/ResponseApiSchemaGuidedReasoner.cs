@@ -16,18 +16,17 @@ namespace Alkampfer.Sgr.Runtime;
 #pragma warning disable OPENAI001
 
 /// <summary>
-/// **Schema-Guided Reasoner using Direct OpenAI Chat API**
+/// **Schema-Guided Reasoner using the Azure OpenAI Response API**
 ///
-/// This implementation uses the Azure OpenAI Chat API directly instead of Semantic Kernel,
+/// This implementation uses the Azure OpenAI Response API directly,
 /// providing these advantages:
-/// - **Direct API Access**: No Semantic Kernel overhead or abstraction
+/// - **Direct API Access**: No extra orchestration framework layer
 /// - **Detailed Token Tracking**: Tracks input, output, and total token counts per step
 /// - **Cumulative Statistics**: Session-wide token usage tracking via TokenUsageStats
 /// - **Configurable Reasoning**: Support for different reasoning effort levels (placeholder for future)
-/// - **Same Interface**: Compatible with SchemaGuidedReasoner for easy switching
 ///
-/// This reasoner bypasses Semantic Kernel and calls the OpenAI Chat Completion API directly,
-/// providing lower overhead while maintaining the same Schema-Guided Reasoning pattern.
+/// This reasoner calls the Response API directly while maintaining the same
+/// schema-guided reasoning pattern.
 /// </summary>
 public class ResponseApiSchemaGuidedReasoner
 {
@@ -214,41 +213,15 @@ public class ResponseApiSchemaGuidedReasoner
                     AnsiConsole.MarkupLine($"[grey](Direct OpenAI API call #{step})[/]");
                 }
 
-                // **Build the chat completion request using direct OpenAI client**
+                // **Build the reasoning request using the direct OpenAI client**
                 var availableToolTypes = DetermineAvailableTools(userRequest, executionTaskResult);
                 var systemPrompt = GenerateSystemPrompt(availableToolTypes);
 
-                // **Configure chat options with schema constraint**
+                // **Configure the schema constraint**
                 var schemaStr = availableToolTypes != null
                     ? _functionFactory.GenerateJsonSchemaForToolCall(availableToolTypes)
                     : _functionFactory.GenerateJsonSchemaForToolCall();
 
-                // **Build chat messages** This is with a direct API call using the standard api.
-                //var messages = new List<ChatMessage>
-                //{
-                //    new SystemChatMessage(systemPrompt),
-                //    new UserChatMessage(userMessage)
-                //};
-
-                //var chatOptions = new ChatCompletionOptions
-                //{
-                //    ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
-                //        jsonSchemaFormatName: "next_step_schema",
-                //        jsonSchema: BinaryData.FromString(schemaStr),
-                //        jsonSchemaIsStrict: true
-                //    )
-                //};
-
-                //if (VerboseOutput)
-                //{
-                //    AnsiConsole.MarkupLine($"[grey]Calling OpenAI with {messages.Count} messages[/]");
-                //}
-
-                //// **Make the direct OpenAI API call**
-                //var chatClient = client.GetChatClient(_deploymentId);
-                //var completion = await chatClient.CompleteChatAsync(messages, chatOptions);
-
-                // use the new response api.
                 var inputItems = new List<ResponseItem> {
                     ResponseItem.CreateSystemMessageItem(systemPrompt) ,
                     ResponseItem.CreateUserMessageItem($"UserQuestion: {userRequest}"),
