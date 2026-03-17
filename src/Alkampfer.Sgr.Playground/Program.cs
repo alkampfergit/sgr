@@ -517,10 +517,12 @@ IMPORTANT: You must always respond with structured JSON that includes:
     private static async Task RunScenarioAsync(string scenarioName, string? userRequest, Func<Task> scenarioBody)
     {
         StateManager.Start();
+        var scenarioStopwatch = Stopwatch.StartNew();
+        const string reasonerMode = "response-api";
 
         using var scenarioActivity = SgrTelemetry.StartScenarioActivity(
             scenarioName,
-            "response-api",
+            reasonerMode,
             userRequest);
 
         var traceId = scenarioActivity?.TraceId.ToString();
@@ -530,10 +532,14 @@ IMPORTANT: You must always respond with structured JSON that includes:
         try
         {
             await scenarioBody();
+            scenarioStopwatch.Stop();
+            SgrTelemetry.RecordConversationCompleted(scenarioName, reasonerMode, scenarioStopwatch.Elapsed);
             logger?.LogInformation("Scenario {ScenarioName} completed", scenarioName);
         }
         catch (Exception ex)
         {
+            scenarioStopwatch.Stop();
+            SgrTelemetry.RecordConversationFailed(scenarioName, reasonerMode, scenarioStopwatch.Elapsed);
             SgrTelemetry.MarkError(scenarioActivity, ex);
             logger?.LogError(ex, "Scenario {ScenarioName} failed", scenarioName);
             throw;
