@@ -7,6 +7,7 @@ using Alkampfer.Sgr.Telemetry;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Diagnostics;
+using Newtonsoft.Json;
 
 namespace Alkampfer.Sgr.Runtime;
 
@@ -409,6 +410,35 @@ public class BusinessFunctionFactory
         // **Use PolymorphicSchemaManager for proper polymorphic deserialization**
         // This automatically handles discriminator-based type resolution for ToolCall property
         return _schemaManager.DeserializeFromJson(json);
+    }
+
+    public string GenerateJsonSchemaForToolParameters(Type toolCallType)
+    {
+        if (toolCallType is null) throw new ArgumentNullException(nameof(toolCallType));
+        if (!_functions.Values.Any(fi => fi.ParameterType == toolCallType))
+        {
+            throw new InvalidOperationException($"Tool call type {toolCallType.Name} is not registered.");
+        }
+
+        return _schemaManager.GenerateDerivedTypeSchema(toolCallType);
+    }
+
+    public ToolCall? DeserializeToolCall(string json, Type toolCallType)
+    {
+        if (string.IsNullOrWhiteSpace(json)) throw new ArgumentException("JSON payload is required.", nameof(json));
+        if (toolCallType is null) throw new ArgumentNullException(nameof(toolCallType));
+        if (!typeof(ToolCall).IsAssignableFrom(toolCallType))
+        {
+            throw new ArgumentException($"Type {toolCallType.Name} must derive from {nameof(ToolCall)}.", nameof(toolCallType));
+        }
+
+        return JsonConvert.DeserializeObject(json, toolCallType) as ToolCall;
+    }
+
+    public string GetToolDiscriminatorValue(Type toolCallType)
+    {
+        if (toolCallType is null) throw new ArgumentNullException(nameof(toolCallType));
+        return PolymorphicSchemaManager<NextStep, ToolCall>.GetDiscriminatorValue(toolCallType);
     }
 
     /// <summary>

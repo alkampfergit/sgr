@@ -17,8 +17,9 @@ namespace Alkampfer.Sgr.Runtime;
 
 /// <summary>
 /// Schema-guided reasoner that uses a two-phase strategy for each step:
-/// first it plans with the full discriminated union, then it re-issues the
-/// same prompt constrained to the selected tool type to obtain final arguments.
+/// first it performs the same NextStep planning call as the standard reasoner,
+/// then it takes the first planned step, identifies the tool to execute, and
+/// asks the model for only that tool's parameter object.
 /// </summary>
 public class ResponseApiForcedToolSchemaGuidedReasoner
 {
@@ -104,22 +105,45 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                     planningSchema,
                     "plan").ConfigureAwait(false);
 
-                if (VerboseOutput)
+                DisplayPlannedStep(plannedStep);
+
+                if (plannedStep.TaskCompleted)
                 {
-                    AnsiConsole.MarkupLine($"[grey]First pass selected tool:[/] {Markup.Escape(plannedStep.Function.GetType().Name)}");
+                    var completionSummary = (plannedStep.Function as ReportTaskCompletionToolCall)?.Summary
+                        ?? plannedStep.CurrentState
+                        ?? "Task completed";
+
+                    _logger.LogInformation(
+                        "Forced-tool Response API SGR execution completed from the first planning call: {Summary}",
+                        completionSummary);
+
+                    if (VerboseOutput)
+                    {
+                        AnsiConsole.MarkupLine($"[blue]Task completed: {Markup.Escape(completionSummary)}[/]");
+                        AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary:[/]");
+                        AnsiConsole.WriteLine(CurrentSessionStats.ToString());
+                    }
+
+                    return completionSummary;
                 }
 
-                var forcedToolType = plannedStep.Function.GetType();
-                var forcedSchema = _functionFactory.GenerateJsonSchemaForToolCall([forcedToolType]);
-                var forcedStep = await RequestNextStepAsync(
+                var firstPlannedStep = plannedStep.PlanRemainingStepsBrief?.FirstOrDefault()
+                    ?? throw new InvalidOperationException("The planning step did not provide a first remaining step.");
+                var forcedToolType = IdentifyToolTypeFromPlan(firstPlannedStep, availableToolTypes, plannedStep);
+                var forcedSchema = _functionFactory.GenerateJsonSchemaForToolParameters(forcedToolType);
+                var forcedPrompt = BuildForcedToolPrompt(systemPrompt, firstPlannedStep, forcedToolType);
+                var forcedInputItems = BuildInputItems(userRequest, executionTaskResult, forcedPrompt);
+
+                var selectedTool = await RequestToolParametersAsync(
                     responseClient,
-                    planningInputItems,
+                    forcedInputItems,
                     forcedSchema,
-                    "forced").ConfigureAwait(false);
+                    "forced",
+                    forcedToolType).ConfigureAwait(false);
 
-                DisplayNextStep(forcedStep);
+                DisplayForcedToolSelection(firstPlannedStep, selectedTool);
 
-                if (forcedStep.Function is ReportTaskCompletionToolCall completionParameter)
+                if (selectedTool is ReportTaskCompletionToolCall completionParameter)
                 {
                     _logger.LogInformation("Forced-tool Response API SGR execution completed: {Summary}", completionParameter.Summary);
                     if (VerboseOutput)
@@ -132,8 +156,6 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                     return completionParameter.Summary;
                 }
 
-                var selectedTool = forcedStep.Function
-                    ?? throw new InvalidOperationException("Forced tool refinement did not return a tool call.");
                 var toolName = selectedTool.GetType().Name.Replace("ToolCall", "") ?? "unknown";
                 var businessResult = await _functionFactory.DispatchToolFunction(selectedTool).ConfigureAwait(false);
                 executionTaskResult.Add(new ToolExecutionResult(
@@ -363,7 +385,126 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
     }
 
-    private void DisplayNextStep(NextStep nextStep)
+    private async Task<ToolCall> RequestToolParametersAsync(
+        OpenAIResponseClient responseClient,
+        List<ResponseItem> inputItems,
+        string schema,
+        string phaseName,
+        Type toolCallType)
+    {
+        Stopwatch? llmStopwatch = null;
+        Activity? modelActivity = null;
+
+        try
+        {
+            var dumpAllPrompt = Dump(inputItems);
+
+            _llmCallCounter++;
+
+            var options = new ResponseCreationOptions
+            {
+                PreviousResponseId = null,
+                ReasoningOptions = new ResponseReasoningOptions()
+                {
+                    ReasoningEffortLevel = ReasoningEffortLevel
+                },
+                TextOptions = new ResponseTextOptions
+                {
+                    TextFormat = ResponseTextFormat.CreateJsonSchemaFormat(
+                        jsonSchemaFormatName: toolCallType.Name,
+                        jsonSchema: BinaryData.FromString(schema),
+                        jsonSchemaFormatDescription: $"Schema for {toolCallType.Name} parameters",
+                        jsonSchemaIsStrict: true)
+                },
+            };
+
+            var systemPrompt = inputItems.OfType<MessageResponseItem>()
+                .FirstOrDefault(m => m.Role == MessageRole.System)?
+                .Content.FirstOrDefault()?.Text ?? string.Empty;
+
+            modelActivity = SgrTelemetry.StartModelCall(
+                provider: "azure-openai-response-api",
+                model: $"{_deploymentId}:{phaseName}:{toolCallType.Name}",
+                systemPrompt: systemPrompt,
+                userPrompt: dumpAllPrompt,
+                schema: schema);
+            SgrTelemetry.RecordLlmCallStarted("azure-openai-response-api", $"{_deploymentId}:{phaseName}:{toolCallType.Name}");
+            llmStopwatch = Stopwatch.StartNew();
+
+            _logger.LogInformation("Requesting {PhaseName} tool parameters for {ToolName} from the Azure OpenAI Response API.", phaseName, toolCallType.Name);
+            _logger.LogInformation("Response API {PhaseName} system prompt: {SystemPrompt}", phaseName, systemPrompt);
+            _logger.LogInformation("Response API {PhaseName} prompt payload: {PromptPayload}", phaseName, dumpAllPrompt);
+
+            OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
+            llmStopwatch.Stop();
+            SgrTelemetry.RecordLlmCallCompleted(modelActivity, llmStopwatch.Elapsed);
+
+            await DumpLlmCallAsync(_llmCallCounter, phaseName, dumpAllPrompt, schema, response).ConfigureAwait(false);
+
+            if (response.Usage != null)
+            {
+                var usage = new TokenUsage
+                {
+                    InputTokenCount = response.Usage.InputTokenCount,
+                    OutputTokenCount = response.Usage.OutputTokenCount,
+                    TotalTokenCount = response.Usage.TotalTokenCount
+                };
+
+                CurrentSessionStats.AddUsage(usage);
+                SgrTelemetry.RecordUsage(modelActivity, usage.InputTokenCount, usage.OutputTokenCount, usage.TotalTokenCount);
+
+                if (VerboseOutput)
+                {
+                    DisplayTokenUsage(usage, _llmCallCounter, phaseName);
+                }
+            }
+
+            var responseMessage = response.OutputItems.OfType<MessageResponseItem>().FirstOrDefault();
+            if (responseMessage == null)
+            {
+                throw new InvalidOperationException("OpenAI Response did not contain a message item.");
+            }
+
+            var assistantRaw = string.Join("\n", responseMessage.Content.Select(c => c.Text));
+            SgrTelemetry.RecordModelResponse(modelActivity, assistantRaw);
+            _logger.LogInformation("Response API {PhaseName} assistant response: {AssistantResponse}", phaseName, assistantRaw);
+
+            if (string.IsNullOrWhiteSpace(assistantRaw))
+            {
+                throw new InvalidOperationException("OpenAI API did not return a tool parameter payload.");
+            }
+
+            var toolCall = _functionFactory.DeserializeToolCall(assistantRaw, toolCallType);
+            if (toolCall == null)
+            {
+                throw new InvalidOperationException($"Failed to deserialize {toolCallType.Name} from OpenAI response:\n{assistantRaw}");
+            }
+
+            if (VerboseOutput)
+            {
+                AnsiConsole.MarkupLine($"[grey]{Markup.Escape(phaseName)} raw response:[/]");
+                AnsiConsole.WriteLine(Markup.Escape(assistantRaw));
+            }
+
+            return toolCall;
+        }
+        catch (Exception)
+        {
+            if (llmStopwatch?.IsRunning == true)
+            {
+                llmStopwatch.Stop();
+                SgrTelemetry.RecordLlmCallFailed(modelActivity, llmStopwatch.Elapsed);
+            }
+
+            throw;
+        }
+        finally
+        {
+            modelActivity?.Dispose();
+        }
+    }
+
+    private void DisplayPlannedStep(NextStep nextStep)
     {
         if (nextStep.PlanRemainingStepsBrief != null && nextStep.PlanRemainingStepsBrief.Count > 0)
         {
@@ -381,17 +522,23 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
 
         var currentPlan = nextStep.PlanRemainingStepsBrief?.FirstOrDefault() ?? "No plan specified";
         var toolName = nextStep.Function?.GetType().Name.Replace("ToolCall", "") ?? "unknown";
-        AnsiConsole.MarkupLine($"[cyan]  Next Step:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(currentPlan)}");
+        AnsiConsole.MarkupLine($"[cyan]  First Pass Tool Guess:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(currentPlan)}");
+    }
+
+    private void DisplayForcedToolSelection(string firstPlannedStep, ToolCall selectedTool)
+    {
+        var toolName = selectedTool.GetType().Name.Replace("ToolCall", "") ?? "unknown";
+        AnsiConsole.MarkupLine($"[cyan]  Forced Step:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(firstPlannedStep)}");
 
         try
         {
-            var nextStepJson = JsonConvert.SerializeObject(nextStep.Function, Formatting.Indented);
+            var nextStepJson = JsonConvert.SerializeObject(selectedTool, Formatting.Indented);
             AnsiConsole.MarkupLine("[dim]  Tool parameters:[/]");
             AnsiConsole.WriteLine(Markup.Escape(nextStepJson));
         }
         catch (Exception)
         {
-            AnsiConsole.MarkupLine($"[dim]    (Unable to serialize NextStep for {Markup.Escape(toolName)})[/]");
+            AnsiConsole.MarkupLine($"[dim]    (Unable to serialize tool parameters for {Markup.Escape(toolName)})[/]");
         }
     }
 
@@ -475,5 +622,77 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                 AnsiConsole.MarkupLine($"[yellow]Warning: Failed to dump LLM call {callNumber}: {Markup.Escape(ex.Message)}[/]");
             }
         }
+    }
+
+    private string BuildForcedToolPrompt(string baseSystemPrompt, string firstPlannedStep, Type toolCallType)
+    {
+        var discriminator = _functionFactory.GetToolDiscriminatorValue(toolCallType);
+        return $@"{baseSystemPrompt}
+
+## Forced Tool Refinement
+You already planned the next action.
+Focus only on the first planned step below and produce the parameters for the matching tool.
+
+First planned step:
+{firstPlannedStep}
+
+You must answer ONLY with a JSON object matching the {toolCallType.Name} schema.
+Do not return the NextStep wrapper.
+Do not return explanations.
+The tool discriminator/type must be ""{discriminator}"".";
+    }
+
+    private Type IdentifyToolTypeFromPlan(
+        string firstPlannedStep,
+        IEnumerable<Type>? availableToolTypes,
+        NextStep plannedStep)
+    {
+        var candidateTypes = (availableToolTypes ?? _functionFactory.SchemaManager.DerivedPolymorphicTypes).ToList();
+        var normalizedStep = Normalize(firstPlannedStep);
+
+        var matches = candidateTypes
+            .Select(type => new
+            {
+                Type = type,
+                Matches = BuildToolAliases(type).Any(alias => normalizedStep.Contains(alias, StringComparison.Ordinal))
+            })
+            .Where(x => x.Matches)
+            .Select(x => x.Type)
+            .ToList();
+
+        if (matches.Count == 1)
+        {
+            _logger.LogInformation(
+                "Identified forced tool {ToolType} from first planned step: {FirstPlannedStep}",
+                matches[0].Name,
+                firstPlannedStep);
+            return matches[0];
+        }
+
+        if (plannedStep.Function != null)
+        {
+            _logger.LogWarning(
+                "Could not uniquely identify tool from first planned step '{FirstPlannedStep}'. Falling back to first-pass tool {ToolType}.",
+                firstPlannedStep,
+                plannedStep.Function.GetType().Name);
+            return plannedStep.Function.GetType();
+        }
+
+        throw new InvalidOperationException($"Could not identify a tool to execute from the first planned step '{firstPlannedStep}'.");
+    }
+
+    private static string Normalize(string value)
+    {
+        return value.Trim().Replace("-", " ").Replace("_", " ").ToLowerInvariant();
+    }
+
+    private IEnumerable<string> BuildToolAliases(Type toolCallType)
+    {
+        var baseName = toolCallType.Name.Replace("ToolCall", string.Empty);
+        var discriminator = _functionFactory.GetToolDiscriminatorValue(toolCallType);
+
+        yield return Normalize(baseName);
+        yield return Normalize(discriminator);
+        yield return Normalize(string.Concat(baseName.Select((c, i) => i > 0 && char.IsUpper(c) ? $" {c}" : c.ToString())));
     }
 }
