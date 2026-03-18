@@ -5,6 +5,7 @@ using OpenAI.Responses;
 using Alkampfer.Sgr.Models;
 using Alkampfer.Sgr.BusinessFunctions;
 using Alkampfer.Sgr.Telemetry;
+using Alkampfer.Sgr.Utils;
 using Spectre.Console;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,8 +18,8 @@ namespace Alkampfer.Sgr.Runtime;
 
 /// <summary>
 /// Schema-guided reasoner that uses a two-phase strategy for each step:
-/// first it performs the same NextStep planning call as the standard reasoner,
-/// then it takes the first planned step, identifies the tool to execute, and
+/// first it performs a structured planning call,
+/// then it takes the first planned step, reads the explicit tool id to execute, and
 /// asks the model for only that tool's parameter object.
 /// </summary>
 public class ResponseApiForcedToolSchemaGuidedReasoner
@@ -95,13 +96,15 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                 var systemPrompt = GenerateSystemPrompt(availableToolTypes);
                 var planningInputItems = BuildInputItems(userRequest, executionTaskResult, systemPrompt);
 
+                var planningSchemaManager = CreateForcedPlanningSchemaManager(availableToolTypes);
                 var planningSchema = availableToolTypes != null
-                    ? _functionFactory.GenerateJsonSchemaForToolCall(availableToolTypes)
-                    : _functionFactory.GenerateJsonSchemaForToolCall();
+                    ? planningSchemaManager.GenerateSchema(availableToolTypes)
+                    : planningSchemaManager.GenerateSchema();
 
                 var plannedStep = await RequestNextStepAsync(
                     responseClient,
                     planningInputItems,
+                    planningSchemaManager,
                     planningSchema,
                     "plan").ConfigureAwait(false);
 
@@ -261,9 +264,10 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         return inputItems;
     }
 
-    private async Task<NextStep> RequestNextStepAsync(
+    private async Task<ForcedReasonerNextStep> RequestNextStepAsync(
         OpenAIResponseClient responseClient,
         List<ResponseItem> inputItems,
+        PolymorphicSchemaManager<ForcedReasonerNextStep, ToolCall> planningSchemaManager,
         string schema,
         string phaseName)
     {
@@ -286,9 +290,9 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                 TextOptions = new ResponseTextOptions
                 {
                     TextFormat = ResponseTextFormat.CreateJsonSchemaFormat(
-                        jsonSchemaFormatName: "NextStep",
+                        jsonSchemaFormatName: "ForcedReasonerNextStep",
                         jsonSchema: BinaryData.FromString(schema),
-                        jsonSchemaFormatDescription: "Schema for NextStep with polymorphic ToolCall support",
+                        jsonSchemaFormatDescription: "Schema for structured planning with polymorphic ToolCall support",
                         jsonSchemaIsStrict: true)
                 },
             };
@@ -350,15 +354,15 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                 throw new InvalidOperationException("OpenAI API did not return a message");
             }
 
-            var nextStep = _functionFactory.DeserializeNextStep(assistantRaw);
+            var nextStep = planningSchemaManager.DeserializeFromJson(assistantRaw);
             if (nextStep == null)
             {
-                throw new InvalidOperationException("Failed to deserialize NextStep from OpenAI response:\n" + assistantRaw);
+                throw new InvalidOperationException("Failed to deserialize ForcedReasonerNextStep from OpenAI response:\n" + assistantRaw);
             }
 
             if (nextStep.Function == null)
             {
-                throw new InvalidOperationException("LLM did not provide a NextStepToolToCall in the NextStep response.");
+                throw new InvalidOperationException("LLM did not provide a tool call in the structured planning response.");
             }
 
             if (VerboseOutput)
@@ -504,15 +508,17 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
     }
 
-    private void DisplayPlannedStep(NextStep nextStep)
+    private void DisplayPlannedStep(ForcedReasonerNextStep nextStep)
     {
         if (nextStep.PlanRemainingStepsBrief != null && nextStep.PlanRemainingStepsBrief.Count > 0)
         {
             AnsiConsole.MarkupLine("[cyan]  Planned remaining steps:[/]");
             for (int i = 0; i < nextStep.PlanRemainingStepsBrief.Count; i++)
             {
-                var stepText = nextStep.PlanRemainingStepsBrief[i] ?? string.Empty;
-                AnsiConsole.MarkupLine($"[cyan]    {i + 1}. {Markup.Escape(stepText)}[/]");
+                var step = nextStep.PlanRemainingStepsBrief[i];
+                var description = step?.Description ?? string.Empty;
+                var toolId = step?.ToolId ?? string.Empty;
+                AnsiConsole.MarkupLine($"[cyan]    {i + 1}. {Markup.Escape(description)}[/] [grey]({Markup.Escape(toolId)})[/]");
             }
         }
         else
@@ -520,15 +526,15 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
             AnsiConsole.MarkupLine("[cyan]  Planned remaining steps:[/] [dim]None[/]");
         }
 
-        var currentPlan = nextStep.PlanRemainingStepsBrief?.FirstOrDefault() ?? "No plan specified";
+        var currentPlan = nextStep.PlanRemainingStepsBrief?.FirstOrDefault()?.Description ?? "No plan specified";
         var toolName = nextStep.Function?.GetType().Name.Replace("ToolCall", "") ?? "unknown";
         AnsiConsole.MarkupLine($"[cyan]  First Pass Tool Guess:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(currentPlan)}");
     }
 
-    private void DisplayForcedToolSelection(string firstPlannedStep, ToolCall selectedTool)
+    private void DisplayForcedToolSelection(ForcedReasonerPlanStep firstPlannedStep, ToolCall selectedTool)
     {
         var toolName = selectedTool.GetType().Name.Replace("ToolCall", "") ?? "unknown";
-        AnsiConsole.MarkupLine($"[cyan]  Forced Step:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(firstPlannedStep)}");
+        AnsiConsole.MarkupLine($"[cyan]  Forced Step:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(firstPlannedStep.Description)} [grey]({Markup.Escape(firstPlannedStep.ToolId)})[/]");
 
         try
         {
@@ -624,7 +630,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
     }
 
-    private string BuildForcedToolPrompt(string baseSystemPrompt, string firstPlannedStep, Type toolCallType)
+    private string BuildForcedToolPrompt(string baseSystemPrompt, ForcedReasonerPlanStep firstPlannedStep, Type toolCallType)
     {
         var discriminator = _functionFactory.GetToolDiscriminatorValue(toolCallType);
         return $@"{baseSystemPrompt}
@@ -634,7 +640,8 @@ You already planned the next action.
 Focus only on the first planned step below and produce the parameters for the matching tool.
 
 First planned step:
-{firstPlannedStep}
+- description: {firstPlannedStep.Description}
+- toolid: {firstPlannedStep.ToolId}
 
 You must answer ONLY with a JSON object matching the {toolCallType.Name} schema.
 Do not return the NextStep wrapper.
@@ -642,57 +649,47 @@ Do not return explanations.
 The tool discriminator/type must be ""{discriminator}"".";
     }
 
+    private PolymorphicSchemaManager<ForcedReasonerNextStep, ToolCall> CreateForcedPlanningSchemaManager(IEnumerable<Type>? availableToolTypes)
+    {
+        var toolTypes = (availableToolTypes ?? _functionFactory.SchemaManager.DerivedPolymorphicTypes).ToArray();
+        return new PolymorphicSchemaManager<ForcedReasonerNextStep, ToolCall>("type").AddDerivedTypes(toolTypes);
+    }
+
     private Type IdentifyToolTypeFromPlan(
-        string firstPlannedStep,
+        ForcedReasonerPlanStep firstPlannedStep,
         IEnumerable<Type>? availableToolTypes,
-        NextStep plannedStep)
+        ForcedReasonerNextStep plannedStep)
     {
         var candidateTypes = (availableToolTypes ?? _functionFactory.SchemaManager.DerivedPolymorphicTypes).ToList();
-        var normalizedStep = Normalize(firstPlannedStep);
+        var normalizedToolId = Normalize(firstPlannedStep.ToolId);
 
-        var matches = candidateTypes
-            .Select(type => new
-            {
-                Type = type,
-                Matches = BuildToolAliases(type).Any(alias => normalizedStep.Contains(alias, StringComparison.Ordinal))
-            })
-            .Where(x => x.Matches)
-            .Select(x => x.Type)
-            .ToList();
+        var directMatch = candidateTypes.FirstOrDefault(type =>
+            string.Equals(
+                Normalize(_functionFactory.GetToolDiscriminatorValue(type)),
+                normalizedToolId,
+                StringComparison.Ordinal));
 
-        if (matches.Count == 1)
+        if (directMatch != null)
         {
             _logger.LogInformation(
-                "Identified forced tool {ToolType} from first planned step: {FirstPlannedStep}",
-                matches[0].Name,
-                firstPlannedStep);
-            return matches[0];
+                "Identified forced tool {ToolType} from first planned step tool id {ToolId}.",
+                directMatch.Name,
+                firstPlannedStep.ToolId);
+            return directMatch;
         }
 
         if (plannedStep.Function != null)
         {
             _logger.LogWarning(
-                "Could not uniquely identify tool from first planned step '{FirstPlannedStep}'. Falling back to first-pass tool {ToolType}.",
-                firstPlannedStep,
+                "Could not identify tool from first planned step tool id '{ToolId}'. Falling back to first-pass tool {ToolType}.",
+                firstPlannedStep.ToolId,
                 plannedStep.Function.GetType().Name);
             return plannedStep.Function.GetType();
         }
 
-        throw new InvalidOperationException($"Could not identify a tool to execute from the first planned step '{firstPlannedStep}'.");
+        throw new InvalidOperationException($"Could not identify a tool to execute from the first planned step tool id '{firstPlannedStep.ToolId}'.");
     }
 
-    private static string Normalize(string value)
-    {
-        return value.Trim().Replace("-", " ").Replace("_", " ").ToLowerInvariant();
-    }
-
-    private IEnumerable<string> BuildToolAliases(Type toolCallType)
-    {
-        var baseName = toolCallType.Name.Replace("ToolCall", string.Empty);
-        var discriminator = _functionFactory.GetToolDiscriminatorValue(toolCallType);
-
-        yield return Normalize(baseName);
-        yield return Normalize(discriminator);
-        yield return Normalize(string.Concat(baseName.Select((c, i) => i > 0 && char.IsUpper(c) ? $" {c}" : c.ToString())));
-    }
+    private static string Normalize(string value) =>
+        value.Trim().Replace("-", " ").Replace("_", " ").ToLowerInvariant();
 }
