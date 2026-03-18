@@ -35,7 +35,7 @@ public class ForcedReasonerNextStepTests
         var planProperty = properties!["PlanRemainingStepsBrief"]?.AsObject();
         Assert.That(planProperty, Is.Not.Null, "Schema should contain PlanRemainingStepsBrief");
 
-        var itemSchema = planProperty!["item"]?.AsObject();
+        var itemSchema = ResolveArrayItemSchema(root, planProperty!);
         Assert.That(itemSchema, Is.Not.Null, "PlanRemainingStepsBrief should define an item schema");
 
         var itemProperties = itemSchema!["properties"]?.AsObject();
@@ -89,5 +89,34 @@ public class ForcedReasonerNextStepTests
         var tool = (SendEmailToolCall)result.Function;
         Assert.That(tool.Subject, Is.EqualTo("Update"));
         Assert.That(tool.RecipientEmail, Is.EqualTo("customer@example.com"));
+    }
+
+    private static JsonObject? ResolveArrayItemSchema(JsonObject root, JsonObject arrayProperty)
+    {
+        var itemNode = arrayProperty["items"] ?? arrayProperty["item"];
+        if (itemNode is null)
+        {
+            return null;
+        }
+
+        if (itemNode is JsonArray itemArray)
+        {
+            itemNode = itemArray.FirstOrDefault();
+        }
+
+        if (itemNode is not JsonObject itemObject)
+        {
+            return null;
+        }
+
+        if (itemObject["$ref"] is JsonValue refValue &&
+            refValue.TryGetValue<string>(out var reference) &&
+            reference.StartsWith("#/definitions/", StringComparison.Ordinal))
+        {
+            var definitionName = reference["#/definitions/".Length..];
+            return root["definitions"]?[definitionName]?.AsObject();
+        }
+
+        return itemObject;
     }
 }
