@@ -397,6 +397,23 @@ public class PolymorphicSchemaManager<TContainer, TPolymorphicBase>
         return JsonConvert.DeserializeObject<TContainer>(json, _jsonSettings);
     }
 
+    public string GenerateDerivedTypeSchema(Type derivedType)
+    {
+        if (!_derivedPolymorphicTypes.Contains(derivedType))
+        {
+            throw new ArgumentException(
+                $"Type {derivedType.Name} is not configured in this PolymorphicSchemaManager.",
+                nameof(derivedType));
+        }
+
+        if (!_derivedSchemaCache.TryGetValue(derivedType, out var schema))
+        {
+            throw new InvalidOperationException($"Derived schema for type {derivedType.Name} was not generated.");
+        }
+
+        return schema.ToJson();
+    }
+
     public static string GetDiscriminatorValue(Type type)
     {
         // Convert PascalCase to snake_case: "SendEmailToolCall" -> "send_email_tool_call"
