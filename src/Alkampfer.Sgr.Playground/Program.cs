@@ -16,8 +16,16 @@ using System.Diagnostics;
 class Program
 {
     private static ResponseApiSchemaGuidedReasoner? responseApiReasoner;
+    private static ResponseApiForcedToolSchemaGuidedReasoner? forcedResponseApiReasoner;
     private static PlaygroundTelemetry? telemetry;
     private static ILogger<Program>? logger;
+    private static PlaygroundReasonerMode selectedReasonerMode = PlaygroundReasonerMode.Normal;
+
+    private enum PlaygroundReasonerMode
+    {
+        Normal,
+        Forced
+    }
 
     static async Task Main(string[] args)
     {
@@ -51,6 +59,8 @@ class Program
             defaultValue: false);
 
         AnsiConsole.WriteLine();
+
+        selectedReasonerMode = PromptReasonerMode();
 
         // Initialize the reasoner
         await InitializeReasoner(verboseOutput);
@@ -100,21 +110,43 @@ class Program
 
                 try
                 {
-                    responseApiReasoner = new ResponseApiSchemaGuidedReasoner(
-                        azureEndpoint: endpoint,
-                        azureApiKey: apiKey,
-                        deploymentId: deploymentId,
-                        businessFunctionFactory: businessFunctionFactory,
-                        options: options,
-                        logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiSchemaGuidedReasoner>())
-                    {
-                        VerboseOutput = verboseOutput,
-#pragma warning disable OPENAI001
-                        ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
-#pragma warning restore OPENAI001
-                    };
+                    responseApiReasoner = null;
+                    forcedResponseApiReasoner = null;
 
-                    ctx.Status("[green]Direct OpenAI API reasoner ready![/]");
+                    if (selectedReasonerMode == PlaygroundReasonerMode.Forced)
+                    {
+                        forcedResponseApiReasoner = new ResponseApiForcedToolSchemaGuidedReasoner(
+                            azureEndpoint: endpoint,
+                            azureApiKey: apiKey,
+                            deploymentId: deploymentId,
+                            businessFunctionFactory: businessFunctionFactory,
+                            options: options,
+                            logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiForcedToolSchemaGuidedReasoner>())
+                        {
+                            VerboseOutput = verboseOutput,
+#pragma warning disable OPENAI001
+                            ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
+#pragma warning restore OPENAI001
+                        };
+                    }
+                    else
+                    {
+                        responseApiReasoner = new ResponseApiSchemaGuidedReasoner(
+                            azureEndpoint: endpoint,
+                            azureApiKey: apiKey,
+                            deploymentId: deploymentId,
+                            businessFunctionFactory: businessFunctionFactory,
+                            options: options,
+                            logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiSchemaGuidedReasoner>())
+                        {
+                            VerboseOutput = verboseOutput,
+#pragma warning disable OPENAI001
+                            ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
+#pragma warning restore OPENAI001
+                        };
+                    }
+
+                    ctx.Status($"[green]{GetSelectedReasonerLabel()} ready![/]");
                 }
                 catch (Exception ex)
                 {
@@ -124,10 +156,28 @@ class Program
             });
 
         var outputMode = verboseOutput ? "verbose" : "concise";
-        AnsiConsole.MarkupLine($"[green]✓[/] Direct OpenAI API reasoner initialized successfully! [grey]({outputMode} output)[/]");
+        AnsiConsole.MarkupLine($"[green]✓[/] {GetSelectedReasonerLabel()} initialized successfully! [grey]({outputMode} output)[/]");
         AnsiConsole.WriteLine();
 
         await Task.CompletedTask;
+    }
+
+    private static PlaygroundReasonerMode PromptReasonerMode()
+    {
+        var selection = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[yellow]Choose the reasoning strategy:[/]")
+                .PageSize(5)
+                .AddChoices([
+                    "Normal reasoner",
+                    "Forced reasoner"
+                ]));
+
+        return selection switch
+        {
+            "Forced reasoner" => PlaygroundReasonerMode.Forced,
+            _ => PlaygroundReasonerMode.Normal
+        };
     }
 
     /// <summary>
@@ -188,7 +238,11 @@ class Program
     /// </summary>
     private static async Task<string> ExecuteReasoningTask(string task)
     {
-        return await responseApiReasoner!.ReasonAndActAsync(task);
+        return selectedReasonerMode switch
+        {
+            PlaygroundReasonerMode.Forced => await forcedResponseApiReasoner!.ReasonAndActAsync(task),
+            _ => await responseApiReasoner!.ReasonAndActAsync(task)
+        };
     }
 
     /// <summary>
@@ -299,11 +353,12 @@ class Program
                     .BorderColor(Color.Green));
 
             // Display token usage stats if using Response API
-            if (responseApiReasoner != null)
+            var currentStats = GetCurrentReasonerStats();
+            if (currentStats != null)
             {
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(
-                    new Panel($"[aqua]{responseApiReasoner.CurrentSessionStats}[/]")
+                    new Panel($"[aqua]{currentStats}[/]")
                         .Header("Token Usage Statistics")
                         .Border(BoxBorder.Rounded)
                         .BorderColor(Color.Aqua));
@@ -348,11 +403,12 @@ class Program
                     .BorderColor(Color.Green));
 
             // Display token usage stats if using Response API
-            if (responseApiReasoner != null)
+            var currentStats = GetCurrentReasonerStats();
+            if (currentStats != null)
             {
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(
-                    new Panel($"[aqua]{responseApiReasoner.CurrentSessionStats}[/]")
+                    new Panel($"[aqua]{currentStats}[/]")
                         .Header("Token Usage Statistics")
                         .Border(BoxBorder.Rounded)
                         .BorderColor(Color.Aqua));
@@ -464,32 +520,66 @@ IMPORTANT: You must always respond with structured JSON that includes:
                     .BorderColor(Color.Grey));
 
             string result;
-            var sqlReasoner = new ResponseApiSchemaGuidedReasoner(
-                azureEndpoint: endpoint,
-                azureApiKey: apiKey,
-                deploymentId: deploymentId,
-                businessFunctionFactory: sqlFunctionFactory,
-                options: sqlOptions,
-                logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiSchemaGuidedReasoner>())
+            var verboseOutput = GetCurrentReasonerVerboseOutput();
+
+            if (selectedReasonerMode == PlaygroundReasonerMode.Forced)
             {
-                VerboseOutput = responseApiReasoner!.VerboseOutput,
-#pragma warning disable OPENAI001
-                ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
-#pragma warning restore OPENAI001
-            };
-
-            result = await AnsiConsole.Status()
-                .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
+                var sqlReasoner = new ResponseApiForcedToolSchemaGuidedReasoner(
+                    azureEndpoint: endpoint,
+                    azureApiKey: apiKey,
+                    deploymentId: deploymentId,
+                    businessFunctionFactory: sqlFunctionFactory,
+                    options: sqlOptions,
+                    logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiForcedToolSchemaGuidedReasoner>())
                 {
-                    return await sqlReasoner.ReasonAndActAsync(userRequest);
-                });
+                    VerboseOutput = verboseOutput,
+#pragma warning disable OPENAI001
+                    ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
+#pragma warning restore OPENAI001
+                };
 
-            AnsiConsole.WriteLine();
-            AnsiConsole.Write(
-                new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
-                    .Header("Token Usage Statistics")
-                    .Border(BoxBorder.Rounded)
-                    .BorderColor(Color.Aqua));
+                result = await AnsiConsole.Status()
+                    .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
+                    {
+                        return await sqlReasoner.ReasonAndActAsync(userRequest);
+                    });
+
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(
+                    new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
+                        .Header("Token Usage Statistics")
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Aqua));
+            }
+            else
+            {
+                var sqlReasoner = new ResponseApiSchemaGuidedReasoner(
+                    azureEndpoint: endpoint,
+                    azureApiKey: apiKey,
+                    deploymentId: deploymentId,
+                    businessFunctionFactory: sqlFunctionFactory,
+                    options: sqlOptions,
+                    logger: telemetry!.LoggerFactory.CreateLogger<ResponseApiSchemaGuidedReasoner>())
+                {
+                    VerboseOutput = verboseOutput,
+#pragma warning disable OPENAI001
+                    ReasoningEffortLevel = ResponseReasoningEffortLevel.Low
+#pragma warning restore OPENAI001
+                };
+
+                result = await AnsiConsole.Status()
+                    .StartAsync("[aqua]Processing SQL + Excel workflow...[/]", async ctx =>
+                    {
+                        return await sqlReasoner.ReasonAndActAsync(userRequest);
+                    });
+
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(
+                    new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
+                        .Header("Token Usage Statistics")
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Aqua));
+            }
 
             AnsiConsole.Write(
                 new Panel($"[green]Final Result:[/] {Markup.Escape(result)}")
@@ -518,7 +608,9 @@ IMPORTANT: You must always respond with structured JSON that includes:
     {
         StateManager.Start();
         var scenarioStopwatch = Stopwatch.StartNew();
-        const string reasonerMode = "response-api";
+        var reasonerMode = selectedReasonerMode == PlaygroundReasonerMode.Forced
+            ? "response-api-forced-tool"
+            : "response-api";
 
         using var scenarioActivity = SgrTelemetry.StartScenarioActivity(
             scenarioName,
@@ -559,5 +651,30 @@ IMPORTANT: You must always respond with structured JSON that includes:
         }
 
         throw new InvalidOperationException($"Missing required configuration value '{key}'.");
+    }
+
+    private static string GetSelectedReasonerLabel()
+    {
+        return selectedReasonerMode == PlaygroundReasonerMode.Forced
+            ? "Forced-tool Response API reasoner"
+            : "Direct OpenAI API reasoner";
+    }
+
+    private static string? GetCurrentReasonerStats()
+    {
+        return selectedReasonerMode switch
+        {
+            PlaygroundReasonerMode.Forced => forcedResponseApiReasoner?.CurrentSessionStats.ToString(),
+            _ => responseApiReasoner?.CurrentSessionStats.ToString()
+        };
+    }
+
+    private static bool GetCurrentReasonerVerboseOutput()
+    {
+        return selectedReasonerMode switch
+        {
+            PlaygroundReasonerMode.Forced => forcedResponseApiReasoner?.VerboseOutput ?? false,
+            _ => responseApiReasoner?.VerboseOutput ?? false
+        };
     }
 }

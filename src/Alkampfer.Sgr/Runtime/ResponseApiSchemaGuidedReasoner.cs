@@ -277,8 +277,8 @@ public class ResponseApiSchemaGuidedReasoner
                 llmStopwatch = Stopwatch.StartNew();
 
                 _logger.LogInformation("Requesting next reasoning step from the Azure OpenAI Response API.");
-                _logger.LogDebug("Response API system prompt: {SystemPrompt}", systemPrompt);
-                _logger.LogDebug("Response API prompt payload: {PromptPayload}", dumpAllPrompt);
+                _logger.LogInformation("Response API system prompt: {SystemPrompt}", systemPrompt);
+                _logger.LogInformation("Response API prompt payload: {PromptPayload}", dumpAllPrompt);
 
                 OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
                 llmStopwatch.Stop();
@@ -320,7 +320,7 @@ public class ResponseApiSchemaGuidedReasoner
                 // **Extract the assistant's response**
                 var assistantRaw = String.Join("\n", responseMessage.Content.Select(c => c.Text));
                 SgrTelemetry.RecordModelResponse(modelActivity, assistantRaw);
-                _logger.LogDebug("Response API assistant response: {AssistantResponse}", assistantRaw);
+                _logger.LogInformation("Response API assistant response: {AssistantResponse}", assistantRaw);
 
                 if (string.IsNullOrEmpty(assistantRaw))
                 {
@@ -438,6 +438,10 @@ public class ResponseApiSchemaGuidedReasoner
                 }
 
                 return $"Error occurred during reasoning: {ex.Message}";
+            }
+            finally
+            {
+                modelActivity?.Dispose();
             }
         }
 

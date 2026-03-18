@@ -41,7 +41,7 @@ This gives one trace id per SGR scenario, while still preserving nested spans fo
 The playground is configured to export OTLP telemetry to `http://localhost:4317` by default. Start the standalone Aspire dashboard container first:
 
 ```bash
-docker run --rm -it -d -p 18888:18888 -p 4317:18889 --name aspire-dashboard  mcr.microsoft.com/dotnet/aspire-dashboard:latest
+docker run -it -d -p 18888:18888 -p 4317:18889 --name aspire-dashboard  mcr.microsoft.com/dotnet/aspire-dashboard:latest
 ```
 
 Then fetch the dashboard login details:
