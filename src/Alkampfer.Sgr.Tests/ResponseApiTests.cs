@@ -11,6 +11,7 @@ using OpenAI.Chat;
 using System.ClientModel;
 using Spectre.Console;
 using OpenAI.Containers;
+using System.IO;
 
 namespace Alkampfer.Sgr.Tests;
 
@@ -39,6 +40,8 @@ namespace Alkampfer.Sgr.Tests;
 [TestFixture]
 public class ResponseApiTests
 {
+    private const string ResponseApiDeployment = "gpt-5-nano";
+
     /// <summary>
     /// **Real LLM test using the OpenAI Response API directly**
     ///
@@ -63,14 +66,11 @@ public class ResponseApiTests
     [Category("LLMIntegration")]
     public async Task GenerateNextStepSchema_WithResponseAPI_PolymorphicDeserialization()
     {
+        var configuration = ReadAzureOpenAiConfiguration();
 
-        // **Arrange**: Skip test if no API key is available
-        var azureApiKey = Dotenv.Get("OPENAI_API_KEY");
-        var azureEndpoint = Dotenv.Get("AZURE_ENDPOINT");
-
-        if (string.IsNullOrEmpty(azureApiKey) || string.IsNullOrEmpty(azureEndpoint))
+        if (!configuration.IsValid)
         {
-            Assert.Ignore("OPENAI_API_KEY or AZURE_ENDPOINT environment variable not set");
+            Assert.Ignore(configuration.BuildIgnoreMessage());
             return;
         }
 
@@ -87,12 +87,12 @@ public class ResponseApiTests
                 AzureOpenAIClientOptions.ServiceVersion.V2025_04_01_Preview);
 
             var client = new AzureOpenAIClient(
-                new Uri(azureEndpoint),
-                new ApiKeyCredential(azureApiKey),
+                configuration.Endpoint!,
+                new ApiKeyCredential(configuration.ApiKey!),
                 clientOptions);
 
             // **Arrange**: Get the Response client for the specified deployment
-            var responseClient = client.GetOpenAIResponseClient("gpt-5-nano");
+            var responseClient = client.GetOpenAIResponseClient(ResponseApiDeployment);
 
             // **Arrange**: Create the user prompt requesting workflow step data
             var userPrompt = @"Please format this workflow step data into JSON:
@@ -215,9 +215,17 @@ public class ResponseApiTests
             Console.WriteLine($"✅ Email details: '{sendEmailCall.Subject}' to '{sendEmailCall.RecipientEmail}'");
             Console.WriteLine("✅ Polymorphic deserialization successful using Response API!");
         }
+        catch (ClientResultException ex)
+        {
+            Assert.Fail(BuildClientFailureMessage(ex, configuration));
+        }
         catch (Exception ex)
         {
-            Assert.Fail($"Failed to perform Response API call: {ex.Message}\nStack trace: {ex.StackTrace}");
+            Assert.Fail(
+                "Failed to perform Response API call.\n" +
+                $"Configuration: {configuration.BuildDiagnosticSummary()}\n" +
+                $"Exception: {ex.GetType().FullName}: {ex.Message}\n" +
+                $"Stack trace: {ex.StackTrace}");
         }
 
         Console.WriteLine("\n🎉 Real LLM call with Response API and polymorphic NextStep schema validation completed successfully!");
@@ -250,5 +258,135 @@ public class ResponseApiTests
             .AddDerivedType<SendEmailToolCall>()
             .AddDerivedType<GetCustomerDataToolCall>()
             .AddDerivedType<IssueInvoiceToolCall>();
+    }
+
+    private static ResponseApiTestConfiguration ReadAzureOpenAiConfiguration()
+    {
+        var apiKey = Dotenv.Get("OPENAI_API_KEY");
+        var endpointRaw = Dotenv.Get("AZURE_ENDPOINT");
+        var envFilePath = FindEnvFilePath();
+
+        var missingValues = new List<string>();
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            missingValues.Add("OPENAI_API_KEY");
+        }
+
+        if (string.IsNullOrWhiteSpace(endpointRaw))
+        {
+            missingValues.Add("AZURE_ENDPOINT");
+        }
+
+        Uri? endpoint = null;
+        if (!string.IsNullOrWhiteSpace(endpointRaw) &&
+            !Uri.TryCreate(endpointRaw, UriKind.Absolute, out endpoint))
+        {
+            return ResponseApiTestConfiguration.Invalid(
+                apiKey,
+                endpointRaw,
+                envFilePath,
+                $"AZURE_ENDPOINT is not a valid absolute URI: '{endpointRaw}'.");
+        }
+
+        if (missingValues.Count > 0)
+        {
+            return ResponseApiTestConfiguration.Invalid(
+                apiKey,
+                endpointRaw,
+                envFilePath,
+                $"Missing required configuration value(s): {string.Join(", ", missingValues)}.");
+        }
+
+        return ResponseApiTestConfiguration.Valid(apiKey!, endpoint!, envFilePath);
+    }
+
+    private static string? FindEnvFilePath()
+    {
+        var currentDirectory = Directory.GetCurrentDirectory();
+        while (!string.IsNullOrEmpty(currentDirectory))
+        {
+            var envFilePath = Path.Combine(currentDirectory, ".env");
+            if (File.Exists(envFilePath))
+            {
+                return envFilePath;
+            }
+
+            currentDirectory = Directory.GetParent(currentDirectory)?.FullName;
+        }
+
+        return null;
+    }
+
+    private static string BuildClientFailureMessage(ClientResultException ex, ResponseApiTestConfiguration configuration)
+    {
+        var guidance = ex.Status switch
+        {
+            401 => "Azure OpenAI rejected the request as unauthorized. Verify OPENAI_API_KEY is present and valid for this Azure resource.",
+            403 => "Azure OpenAI rejected the request as forbidden. The key may not have permission to use this resource or deployment.",
+            404 => $"Azure OpenAI could not find the endpoint or deployment '{ResponseApiDeployment}'. Verify AZURE_ENDPOINT and the deployment name.",
+            429 => "Azure OpenAI rate limited the request. This can be transient in CI or indicate quota exhaustion.",
+            _ => "Azure OpenAI returned an unexpected HTTP error. Check endpoint, deployment, API version support, and credentials."
+        };
+
+        var responseSummary = ex.GetRawResponse() is { } response
+            ? $"HTTP {(int)response.Status} {response.ReasonPhrase}"
+            : $"HTTP {ex.Status}";
+
+        return
+            "Failed to perform Response API call.\n" +
+            $"{guidance}\n" +
+            $"Configuration: {configuration.BuildDiagnosticSummary()}\n" +
+            $"Service response: {responseSummary}\n" +
+            $"Exception: {ex.Message}";
+    }
+
+    private sealed record ResponseApiTestConfiguration(
+        string? ApiKey,
+        Uri? Endpoint,
+        string? EndpointRaw,
+        string? EnvFilePath,
+        string? ValidationIssue)
+    {
+        public bool IsValid => ValidationIssue is null && !string.IsNullOrWhiteSpace(ApiKey) && Endpoint is not null;
+
+        public static ResponseApiTestConfiguration Valid(string apiKey, Uri endpoint, string? envFilePath) =>
+            new(apiKey, endpoint, endpoint.ToString(), envFilePath, null);
+
+        public static ResponseApiTestConfiguration Invalid(
+            string? apiKey,
+            string? endpointRaw,
+            string? envFilePath,
+            string validationIssue) =>
+            new(apiKey, null, endpointRaw, envFilePath, validationIssue);
+
+        public string BuildIgnoreMessage()
+        {
+            var envFileMessage = EnvFilePath is null
+                ? "No .env file was found while walking parent directories from the current test working directory."
+                : $".env file discovered at '{EnvFilePath}'.";
+
+            return
+                "Skipping Azure OpenAI integration test because configuration is incomplete.\n" +
+                $"{ValidationIssue}\n" +
+                $"{envFileMessage}\n" +
+                $"Current directory: '{Directory.GetCurrentDirectory()}'\n" +
+                "Expected values: OPENAI_API_KEY and AZURE_ENDPOINT.";
+        }
+
+        public string BuildDiagnosticSummary()
+        {
+            var endpointSummary = Endpoint?.ToString() ?? EndpointRaw ?? "<missing>";
+            var envFileSummary = EnvFilePath ?? "<not found>";
+            var apiKeySummary = string.IsNullOrWhiteSpace(ApiKey)
+                ? "<missing>"
+                : $"present (length: {ApiKey.Length})";
+
+            return
+                $"deployment='{ResponseApiDeployment}', " +
+                $"endpoint='{endpointSummary}', " +
+                $"apiKey={apiKeySummary}, " +
+                $"envFile='{envFileSummary}', " +
+                $"cwd='{Directory.GetCurrentDirectory()}'";
+        }
     }
 }
