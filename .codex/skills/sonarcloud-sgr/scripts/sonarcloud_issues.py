@@ -122,38 +122,45 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    pr_metadata = detect_pr_metadata()
-
+def resolve_context(args: argparse.Namespace, pr_metadata: dict[str, Any] | None) -> tuple[str | None, str | None, str] | None:
     branch = args.branch
     pull_request = args.pr
-    context_label = ""
 
     if args.mode == "base":
         if not branch and pr_metadata:
             branch = pr_metadata.get("baseRefName")
         if not branch:
             branch = "main"
-        context_label = f"base branch '{branch}'"
-    else:
-        if not pull_request and pr_metadata:
-            pr_value = pr_metadata.get("number")
-            pull_request = str(pr_value) if pr_value is not None else None
-        if not pull_request:
-            print(
-                "Unable to determine the current pull request. "
-                "Provide it explicitly with --pr <number>.",
-                file=sys.stderr,
-            )
-            return 2
-        context_label = f"pull request '{pull_request}'"
+        return branch, None, f"base branch '{branch}'"
+
+    if not pull_request and pr_metadata:
+        pr_value = pr_metadata.get("number")
+        pull_request = str(pr_value) if pr_value is not None else None
+    if not pull_request:
+        return None
+
+    return None, pull_request, f"pull request '{pull_request}'"
+
+
+def main() -> int:
+    args = parse_args()
+    pr_metadata = detect_pr_metadata()
+    context = resolve_context(args, pr_metadata)
+    if context is None:
+        print(
+            "Unable to determine the current pull request. "
+            "Provide it explicitly with --pr <number>.",
+            file=sys.stderr,
+        )
+        return 2
+
+    branch, pull_request, context_label = context
 
     url = build_url(
         base_url=args.base_url,
         project=args.project,
-        branch=branch if args.mode == "base" else None,
-        pull_request=pull_request if args.mode == "pr" else None,
+        branch=branch,
+        pull_request=pull_request,
     )
 
     try:
