@@ -24,6 +24,8 @@ namespace Alkampfer.Sgr.Runtime;
 /// </summary>
 public class ResponseApiForcedToolSchemaGuidedReasoner
 {
+    private const string ResponseApiProvider = "azure-openai-response-api";
+
     private readonly string _azureEndpoint;
     private readonly string _azureApiKey;
     private readonly string _deploymentId;
@@ -38,9 +40,9 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
     public ResponseApiSchemaGuidedReasoner.TokenUsageStats CurrentSessionStats { get; private set; } = new();
 
     private int _llmCallCounter = 0;
-    private string _llmCallsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "llm_calls");
+    private readonly string _llmCallsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "llm_calls");
 
-    private record ToolExecutionResult(string ToolName, string Parameters, string Summary);
+    private sealed record ToolExecutionResult(string ToolName, string Parameters, string Summary);
 
     public ResponseApiForcedToolSchemaGuidedReasoner(
         string azureEndpoint,
@@ -60,7 +62,8 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
 
     public async Task<string> ReasonAndActAsync(string userRequest)
     {
-        using var executionActivity = SgrTelemetry.StartReasonerExecution("response-api-forced-tool", userRequest);
+        const string reasonerKind = "response-api-forced-tool";
+        using var executionActivity = SgrTelemetry.StartReasonerExecution(reasonerKind, userRequest);
 
         CurrentSessionStats = new ResponseApiSchemaGuidedReasoner.TokenUsageStats();
         _llmCallCounter = 0;
@@ -81,7 +84,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
 
         for (int step = 1; step <= 20; step++)
         {
-            using var stepActivity = SgrTelemetry.StartPlanningStep("response-api-forced-tool", step);
+            using var stepActivity = SgrTelemetry.StartPlanningStep(reasonerKind, step);
             stepActivity?.SetTag("sgr.executed_task_count", executionTaskResult.Count);
 
             if (VerboseOutput)
@@ -110,97 +113,36 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
 
                 DisplayPlannedStep(plannedStep);
 
-                if (plannedStep.TaskCompleted)
+                if (TryCompleteFromPlannedStep(plannedStep, out var planningCompletionSummary))
                 {
-                    var completionSummary = (plannedStep.Function as ReportTaskCompletionToolCall)?.Summary
-                        ?? plannedStep.CurrentState
-                        ?? "Task completed";
-
-                    _logger.LogInformation(
-                        "Forced-tool Response API SGR execution completed from the first planning call: {Summary}",
-                        completionSummary);
-
-                    if (VerboseOutput)
-                    {
-                        AnsiConsole.MarkupLine($"[blue]Task completed: {Markup.Escape(completionSummary)}[/]");
-                        AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary:[/]");
-                        AnsiConsole.WriteLine(CurrentSessionStats.ToString());
-                    }
-
-                    return completionSummary;
+                    return CompleteReasoning("from the first planning call", planningCompletionSummary);
                 }
 
-                var firstPlannedStep = plannedStep.PlanRemainingStepsBrief?.FirstOrDefault()
-                    ?? throw new InvalidOperationException("The planning step did not provide a first remaining step.");
-                var forcedToolType = IdentifyToolTypeFromPlan(firstPlannedStep, availableToolTypes, plannedStep);
-                var forcedSchema = _functionFactory.GenerateJsonSchemaForToolParameters(forcedToolType);
-                var forcedPrompt = BuildForcedToolPrompt(systemPrompt, firstPlannedStep, forcedToolType);
-                var forcedInputItems = BuildInputItems(userRequest, executionTaskResult, forcedPrompt);
-
-                var selectedTool = await RequestToolParametersAsync(
+                var selectedTool = await ResolveSelectedToolAsync(
                     responseClient,
-                    forcedInputItems,
-                    forcedSchema,
-                    "forced",
-                    forcedToolType).ConfigureAwait(false);
-
-                DisplayForcedToolSelection(firstPlannedStep, selectedTool);
+                    userRequest,
+                    executionTaskResult,
+                    systemPrompt,
+                    availableToolTypes,
+                    plannedStep).ConfigureAwait(false);
 
                 if (selectedTool is ReportTaskCompletionToolCall completionParameter)
                 {
-                    _logger.LogInformation("Forced-tool Response API SGR execution completed: {Summary}", completionParameter.Summary);
-                    if (VerboseOutput)
-                    {
-                        AnsiConsole.MarkupLine($"[blue]Task completed: {Markup.Escape(completionParameter.Summary)}[/]");
-                        AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary:[/]");
-                        AnsiConsole.WriteLine(CurrentSessionStats.ToString());
-                    }
-
-                    return completionParameter.Summary;
+                    return CompleteReasoning(string.Empty, completionParameter.Summary);
                 }
 
-                var toolName = selectedTool.GetType().Name.Replace("ToolCall", "") ?? "unknown";
-                var businessResult = await _functionFactory.DispatchToolFunction(selectedTool).ConfigureAwait(false);
-                executionTaskResult.Add(new ToolExecutionResult(
-                    toolName,
-                    JsonConvert.SerializeObject(selectedTool),
-                    businessResult.Summary));
-
-                if (VerboseOutput)
-                {
-                    AnsiConsole.Write("[green]    ✓ [/]");
-                    AnsiConsole.WriteLine(Markup.Escape(businessResult.Summary));
-                }
-                else
-                {
-                    AnsiConsole.MarkupLine($"  [grey]→[/] {Markup.Escape(businessResult.Summary)}");
-                }
+                await ExecuteSelectedToolAsync(selectedTool, executionTaskResult).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 SgrTelemetry.MarkError(stepActivity, ex);
                 SgrTelemetry.MarkError(executionActivity, ex);
                 _logger.LogError(ex, "Forced-tool Response API reasoning failed at step {Step}", step);
-                AnsiConsole.Write("[red]Error in reasoning step ");
-                AnsiConsole.Write(step.ToString());
-                AnsiConsole.Write(": [/]");
-                AnsiConsole.WriteLine(ex.Message);
-
-                if (VerboseOutput)
-                {
-                    AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary (up to error):[/]");
-                    AnsiConsole.WriteLine(CurrentSessionStats.ToString());
-                }
-
-                return $"Error occurred during reasoning: {ex.Message}";
+                return ReportReasoningFailure(step, ex);
             }
         }
 
-        if (VerboseOutput)
-        {
-            AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary:[/]");
-            AnsiConsole.WriteLine(CurrentSessionStats.ToString());
-        }
+        DisplaySessionTokenUsageSummary();
 
         return "Task completed after maximum reasoning steps";
     }
@@ -234,7 +176,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         return _options.ToolTypeSelector(userRequest, history);
     }
 
-    private List<ResponseItem> BuildInputItems(
+    private static List<ResponseItem> BuildInputItems(
         string userRequest,
         List<ToolExecutionResult> executionTaskResult,
         string systemPrompt)
@@ -298,19 +240,20 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
             };
 
             modelActivity = SgrTelemetry.StartModelCall(
-                provider: "azure-openai-response-api",
+                provider: ResponseApiProvider,
                 model: $"{_deploymentId}:{phaseName}",
                 systemPrompt: inputItems.OfType<MessageResponseItem>().FirstOrDefault(m => m.Role == MessageRole.System)?.Content.FirstOrDefault()?.Text ?? string.Empty,
                 userPrompt: dumpAllPrompt,
                 schema: schema);
-            SgrTelemetry.RecordLlmCallStarted("azure-openai-response-api", $"{_deploymentId}:{phaseName}");
+            SgrTelemetry.RecordLlmCallStarted(ResponseApiProvider, $"{_deploymentId}:{phaseName}");
             llmStopwatch = Stopwatch.StartNew();
 
             _logger.LogInformation("Requesting {PhaseName} reasoning step from the Azure OpenAI Response API.", phaseName);
-            _logger.LogInformation("Response API {PhaseName} system prompt: {SystemPrompt}",
+            _logger.LogInformation(
+                "Response API {PhaseName} request details. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
                 phaseName,
-                inputItems.OfType<MessageResponseItem>().FirstOrDefault(m => m.Role == MessageRole.System)?.Content.FirstOrDefault()?.Text ?? string.Empty);
-            _logger.LogInformation("Response API {PhaseName} prompt payload: {PromptPayload}", phaseName, dumpAllPrompt);
+                inputItems.OfType<MessageResponseItem>().FirstOrDefault(m => m.Role == MessageRole.System)?.Content.FirstOrDefault()?.Text ?? string.Empty,
+                dumpAllPrompt);
             OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
             llmStopwatch.Stop();
             SgrTelemetry.RecordLlmCallCompleted(modelActivity, llmStopwatch.Elapsed);
@@ -427,17 +370,20 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                 .Content.FirstOrDefault()?.Text ?? string.Empty;
 
             modelActivity = SgrTelemetry.StartModelCall(
-                provider: "azure-openai-response-api",
+                provider: ResponseApiProvider,
                 model: $"{_deploymentId}:{phaseName}:{toolCallType.Name}",
                 systemPrompt: systemPrompt,
                 userPrompt: dumpAllPrompt,
                 schema: schema);
-            SgrTelemetry.RecordLlmCallStarted("azure-openai-response-api", $"{_deploymentId}:{phaseName}:{toolCallType.Name}");
+            SgrTelemetry.RecordLlmCallStarted(ResponseApiProvider, $"{_deploymentId}:{phaseName}:{toolCallType.Name}");
             llmStopwatch = Stopwatch.StartNew();
 
             _logger.LogInformation("Requesting {PhaseName} tool parameters for {ToolName} from the Azure OpenAI Response API.", phaseName, toolCallType.Name);
-            _logger.LogInformation("Response API {PhaseName} system prompt: {SystemPrompt}", phaseName, systemPrompt);
-            _logger.LogInformation("Response API {PhaseName} prompt payload: {PromptPayload}", phaseName, dumpAllPrompt);
+            _logger.LogInformation(
+                "Response API {PhaseName} request details. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
+                phaseName,
+                systemPrompt,
+                dumpAllPrompt);
 
             OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
             llmStopwatch.Stop();
@@ -478,7 +424,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
                 throw new InvalidOperationException("OpenAI API did not return a tool parameter payload.");
             }
 
-            var toolCall = _functionFactory.DeserializeToolCall(assistantRaw, toolCallType);
+            var toolCall = BusinessFunctionFactory.DeserializeToolCall(assistantRaw, toolCallType);
             if (toolCall == null)
             {
                 throw new InvalidOperationException($"Failed to deserialize {toolCallType.Name} from OpenAI response:\n{assistantRaw}");
@@ -508,7 +454,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
     }
 
-    private void DisplayPlannedStep(ForcedReasonerNextStep nextStep)
+    private static void DisplayPlannedStep(ForcedReasonerNextStep nextStep)
     {
         if (nextStep.PlanRemainingStepsBrief != null && nextStep.PlanRemainingStepsBrief.Count > 0)
         {
@@ -527,13 +473,13 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
 
         var currentPlan = nextStep.PlanRemainingStepsBrief?.FirstOrDefault()?.Description ?? "No plan specified";
-        var toolName = nextStep.Function?.GetType().Name.Replace("ToolCall", "") ?? "unknown";
+        var toolName = nextStep.Function?.GetType().Name.Replace("ToolCall", string.Empty) ?? "unknown";
         AnsiConsole.MarkupLine($"[cyan]  First Pass Tool Guess:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(currentPlan)}");
     }
 
-    private void DisplayForcedToolSelection(ForcedReasonerPlanStep firstPlannedStep, ToolCall selectedTool)
+    private static void DisplayForcedToolSelection(ForcedReasonerPlanStep firstPlannedStep, ToolCall selectedTool)
     {
-        var toolName = selectedTool.GetType().Name.Replace("ToolCall", "") ?? "unknown";
+        var toolName = selectedTool.GetType().Name.Replace("ToolCall", string.Empty);
         AnsiConsole.MarkupLine($"[cyan]  Forced Step:[/] [yellow]{Markup.Escape(toolName)}[/] - {Markup.Escape(firstPlannedStep.Description)} [grey]({Markup.Escape(firstPlannedStep.ToolId)})[/]");
 
         try
@@ -548,7 +494,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
     }
 
-    private string Dump(List<ResponseItem> inputItems)
+    private static string Dump(List<ResponseItem> inputItems)
     {
         StringBuilder sb = new();
         foreach (var item in inputItems)
@@ -570,7 +516,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         return sb.ToString();
     }
 
-    private void DisplayTokenUsage(TokenUsage usage, int callNumber, string phaseName)
+    private static void DisplayTokenUsage(TokenUsage usage, int callNumber, string phaseName)
     {
         AnsiConsole.MarkupLine($"[grey]  Call {callNumber} ({Markup.Escape(phaseName)}) Tokens:[/]");
         AnsiConsole.MarkupLine($"[grey]    Input: {usage.InputTokenCount}[/]");
@@ -632,7 +578,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
 
     private string BuildForcedToolPrompt(string baseSystemPrompt, ForcedReasonerPlanStep firstPlannedStep, Type toolCallType)
     {
-        var discriminator = _functionFactory.GetToolDiscriminatorValue(toolCallType);
+        var discriminator = BusinessFunctionFactory.GetToolDiscriminatorValue(toolCallType);
         return $@"{baseSystemPrompt}
 
 ## Forced Tool Refinement
@@ -665,7 +611,7 @@ The tool discriminator/type must be ""{discriminator}"".";
 
         var directMatch = candidateTypes.FirstOrDefault(type =>
             string.Equals(
-                Normalize(_functionFactory.GetToolDiscriminatorValue(type)),
+                Normalize(BusinessFunctionFactory.GetToolDiscriminatorValue(type)),
                 normalizedToolId,
                 StringComparison.Ordinal));
 
@@ -688,6 +634,111 @@ The tool discriminator/type must be ""{discriminator}"".";
         }
 
         throw new InvalidOperationException($"Could not identify a tool to execute from the first planned step tool id '{firstPlannedStep.ToolId}'.");
+    }
+
+    private bool TryCompleteFromPlannedStep(ForcedReasonerNextStep plannedStep, out string completionSummary)
+    {
+        if (!plannedStep.TaskCompleted)
+        {
+            completionSummary = string.Empty;
+            return false;
+        }
+
+        completionSummary = (plannedStep.Function as ReportTaskCompletionToolCall)?.Summary
+            ?? plannedStep.CurrentState
+            ?? "Task completed";
+        return true;
+    }
+
+    private async Task<ToolCall> ResolveSelectedToolAsync(
+        OpenAIResponseClient responseClient,
+        string userRequest,
+        List<ToolExecutionResult> executionTaskResult,
+        string systemPrompt,
+        IEnumerable<Type>? availableToolTypes,
+        ForcedReasonerNextStep plannedStep)
+    {
+        var firstPlannedStep = plannedStep.PlanRemainingStepsBrief?.FirstOrDefault()
+            ?? throw new InvalidOperationException("The planning step did not provide a first remaining step.");
+        var forcedToolType = IdentifyToolTypeFromPlan(firstPlannedStep, availableToolTypes, plannedStep);
+        var forcedSchema = _functionFactory.GenerateJsonSchemaForToolParameters(forcedToolType);
+        var forcedPrompt = BuildForcedToolPrompt(systemPrompt, firstPlannedStep, forcedToolType);
+        var forcedInputItems = BuildInputItems(userRequest, executionTaskResult, forcedPrompt);
+
+        var selectedTool = await RequestToolParametersAsync(
+            responseClient,
+            forcedInputItems,
+            forcedSchema,
+            "forced",
+            forcedToolType).ConfigureAwait(false);
+
+        DisplayForcedToolSelection(firstPlannedStep, selectedTool);
+        return selectedTool;
+    }
+
+    private async Task ExecuteSelectedToolAsync(ToolCall selectedTool, List<ToolExecutionResult> executionTaskResult)
+    {
+        var toolName = selectedTool.GetType().Name.Replace("ToolCall", string.Empty);
+        var businessResult = await _functionFactory.DispatchToolFunction(selectedTool).ConfigureAwait(false);
+        executionTaskResult.Add(new ToolExecutionResult(
+            toolName,
+            JsonConvert.SerializeObject(selectedTool),
+            businessResult.Summary));
+
+        if (VerboseOutput)
+        {
+            AnsiConsole.Write("[green]    ✓ [/]");
+            AnsiConsole.WriteLine(Markup.Escape(businessResult.Summary));
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"  [grey]→[/] {Markup.Escape(businessResult.Summary)}");
+    }
+
+    private string CompleteReasoning(string completionContext, string completionSummary)
+    {
+        var completionSuffix = string.IsNullOrWhiteSpace(completionContext)
+            ? string.Empty
+            : $" {completionContext}";
+        _logger.LogInformation(
+            "Forced-tool Response API SGR execution completed{CompletionContext}: {Summary}",
+            completionSuffix,
+            completionSummary);
+
+        if (VerboseOutput)
+        {
+            AnsiConsole.MarkupLine($"[blue]Task completed: {Markup.Escape(completionSummary)}[/]");
+            DisplaySessionTokenUsageSummary();
+        }
+
+        return completionSummary;
+    }
+
+    private string ReportReasoningFailure(int step, Exception ex)
+    {
+        AnsiConsole.Write("[red]Error in reasoning step ");
+        AnsiConsole.Write(step.ToString());
+        AnsiConsole.Write(": [/]");
+        AnsiConsole.WriteLine(ex.Message);
+
+        if (VerboseOutput)
+        {
+            AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary (up to error):[/]");
+            AnsiConsole.WriteLine(CurrentSessionStats.ToString());
+        }
+
+        return $"Error occurred during reasoning: {ex.Message}";
+    }
+
+    private void DisplaySessionTokenUsageSummary()
+    {
+        if (!VerboseOutput)
+        {
+            return;
+        }
+
+        AnsiConsole.MarkupLine("\n[bold cyan]Session Token Usage Summary:[/]");
+        AnsiConsole.WriteLine(CurrentSessionStats.ToString());
     }
 
     private static string Normalize(string value) =>

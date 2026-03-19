@@ -30,3 +30,4 @@
 - The repo includes a test project in `src/Alkampfer.Sgr.Tests`. Use `dotnet build` as the minimum verification step and run `dotnet test sgr.slnx -c Debug` when changes could affect behavior.
 - Do not consider a task complete if the solution does not compile or if any test fails. If build or test failures remain, report that explicitly as an open issue.
 - Current build is clean for errors but has existing compiler warnings; do not treat the repo as warning-free.
+- SonarCloud project key: `alkampfergit_sgr`.

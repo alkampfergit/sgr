@@ -15,6 +15,8 @@ using System.Diagnostics;
 /// </summary>
 class Program
 {
+    private const string TokenUsageStatisticsHeader = "Token Usage Statistics";
+
     private static ResponseApiSchemaGuidedReasoner? responseApiReasoner;
     private static ResponseApiForcedToolSchemaGuidedReasoner? forcedResponseApiReasoner;
     private static PlaygroundTelemetry? telemetry;
@@ -359,7 +361,7 @@ class Program
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(
                     new Panel($"[aqua]{currentStats}[/]")
-                        .Header("Token Usage Statistics")
+                        .Header(TokenUsageStatisticsHeader)
                         .Border(BoxBorder.Rounded)
                         .BorderColor(Color.Aqua));
             }
@@ -409,7 +411,7 @@ class Program
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(
                     new Panel($"[aqua]{currentStats}[/]")
-                        .Header("Token Usage Statistics")
+                        .Header(TokenUsageStatisticsHeader)
                         .Border(BoxBorder.Rounded)
                         .BorderColor(Color.Aqua));
             }
@@ -547,7 +549,7 @@ IMPORTANT: You must always respond with structured JSON that includes:
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(
                     new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
-                        .Header("Token Usage Statistics")
+                        .Header(TokenUsageStatisticsHeader)
                         .Border(BoxBorder.Rounded)
                         .BorderColor(Color.Aqua));
             }
@@ -576,7 +578,7 @@ IMPORTANT: You must always respond with structured JSON that includes:
                 AnsiConsole.WriteLine();
                 AnsiConsole.Write(
                     new Panel($"[aqua]{sqlReasoner.CurrentSessionStats}[/]")
-                        .Header("Token Usage Statistics")
+                        .Header(TokenUsageStatisticsHeader)
                         .Border(BoxBorder.Rounded)
                         .BorderColor(Color.Aqua));
             }
@@ -633,8 +635,7 @@ IMPORTANT: You must always respond with structured JSON that includes:
             scenarioStopwatch.Stop();
             SgrTelemetry.RecordConversationFailed(scenarioName, reasonerMode, scenarioStopwatch.Elapsed);
             SgrTelemetry.MarkError(scenarioActivity, ex);
-            logger?.LogError(ex, "Scenario {ScenarioName} failed", scenarioName);
-            throw;
+            throw new InvalidOperationException($"Scenario '{scenarioName}' failed.", ex);
         }
         finally
         {

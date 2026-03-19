@@ -30,6 +30,8 @@ namespace Alkampfer.Sgr.Runtime;
 /// </summary>
 public class ResponseApiSchemaGuidedReasoner
 {
+    private const string ResponseApiProvider = "azure-openai-response-api";
+
     private readonly string _azureEndpoint;
     private readonly string _azureApiKey;
     private readonly string _deploymentId;
@@ -268,17 +270,19 @@ public class ResponseApiSchemaGuidedReasoner
                 };
 
                 modelActivity = SgrTelemetry.StartModelCall(
-                    provider: "azure-openai-response-api",
+                    provider: ResponseApiProvider,
                     model: _deploymentId,
                     systemPrompt: systemPrompt,
                     userPrompt: dumpAllPrompt,
                     schema: schemaStr);
-                SgrTelemetry.RecordLlmCallStarted("azure-openai-response-api", _deploymentId);
+                SgrTelemetry.RecordLlmCallStarted(ResponseApiProvider, _deploymentId);
                 llmStopwatch = Stopwatch.StartNew();
 
                 _logger.LogInformation("Requesting next reasoning step from the Azure OpenAI Response API.");
-                _logger.LogInformation("Response API system prompt: {SystemPrompt}", systemPrompt);
-                _logger.LogInformation("Response API prompt payload: {PromptPayload}", dumpAllPrompt);
+                _logger.LogInformation(
+                    "Response API request details. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
+                    systemPrompt,
+                    dumpAllPrompt);
 
                 OpenAIResponse response = await responseClient.CreateResponseAsync(inputItems, options).ConfigureAwait(false);
                 llmStopwatch.Stop();

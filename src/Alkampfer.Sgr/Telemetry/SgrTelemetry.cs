@@ -9,6 +9,10 @@ namespace Alkampfer.Sgr.Telemetry;
 /// </summary>
 public static class SgrTelemetry
 {
+    private const string ScenarioNameTag = "sgr.scenario.name";
+    private const string ReasonerModeTag = "sgr.reasoner.mode";
+    private const string ToolNameTag = "sgr.tool.name";
+
     public const string ActivitySourceName = "Alkampfer.Sgr";
     public const string MeterName = "Alkampfer.Sgr";
 
@@ -32,11 +36,7 @@ public static class SgrTelemetry
 
     public static Activity? StartScenarioActivity(string scenarioName, string reasonerMode, string? userRequest = null)
     {
-        var tags = new TagList
-        {
-            { "sgr.scenario.name", scenarioName },
-            { "sgr.reasoner.mode", reasonerMode }
-        };
+        var tags = CreateScenarioTags(scenarioName, reasonerMode);
         ConversationStartedCounter.Add(1, tags);
         ActiveConversationCounter.Add(1, tags);
 
@@ -47,8 +47,8 @@ public static class SgrTelemetry
         }
 
         activity.DisplayName = scenarioName;
-        activity.SetTag("sgr.scenario.name", scenarioName);
-        activity.SetTag("sgr.reasoner.mode", reasonerMode);
+        activity.SetTag(ScenarioNameTag, scenarioName);
+        activity.SetTag(ReasonerModeTag, reasonerMode);
         SetIfNotEmpty(activity, "sgr.user.request", userRequest);
         return activity;
     }
@@ -107,7 +107,7 @@ public static class SgrTelemetry
     {
         ToolCallCounter.Add(1, new TagList
         {
-            { "sgr.tool.name", toolName }
+            { ToolNameTag, toolName }
         });
 
         var activity = ActivitySource.StartActivity("sgr.tool.execute", ActivityKind.Internal);
@@ -117,7 +117,7 @@ public static class SgrTelemetry
         }
 
         activity.DisplayName = toolName;
-        activity.SetTag("sgr.tool.name", toolName);
+        activity.SetTag(ToolNameTag, toolName);
         SetIfNotEmpty(activity, "sgr.tool.parameters", Serialize(parameters));
         return activity;
     }
@@ -174,11 +174,7 @@ public static class SgrTelemetry
 
     public static void RecordConversationCompleted(string scenarioName, string reasonerMode, TimeSpan duration)
     {
-        var tags = new TagList
-        {
-            { "sgr.scenario.name", scenarioName },
-            { "sgr.reasoner.mode", reasonerMode }
-        };
+        var tags = CreateScenarioTags(scenarioName, reasonerMode);
 
         ConversationCompletedCounter.Add(1, tags);
         ActiveConversationCounter.Add(-1, tags);
@@ -187,11 +183,7 @@ public static class SgrTelemetry
 
     public static void RecordConversationFailed(string scenarioName, string reasonerMode, TimeSpan duration)
     {
-        var tags = new TagList
-        {
-            { "sgr.scenario.name", scenarioName },
-            { "sgr.reasoner.mode", reasonerMode }
-        };
+        var tags = CreateScenarioTags(scenarioName, reasonerMode);
 
         ConversationFailedCounter.Add(1, tags);
         ActiveConversationCounter.Add(-1, tags);
@@ -222,9 +214,9 @@ public static class SgrTelemetry
     public static void RecordToolCompleted(Activity? activity, string toolName, TimeSpan duration)
     {
         var tags = CreateTagsFromActivity(activity);
-        if (!tags.Any(static pair => pair.Key == "sgr.tool.name"))
+        if (!tags.Any(static pair => pair.Key == ToolNameTag))
         {
-            tags.Add("sgr.tool.name", toolName);
+            tags.Add(ToolNameTag, toolName);
         }
 
         ToolDurationHistogram.Record(duration.TotalSeconds, tags);
@@ -233,9 +225,9 @@ public static class SgrTelemetry
     public static void RecordToolFailed(Activity? activity, string toolName, TimeSpan duration)
     {
         var tags = CreateTagsFromActivity(activity);
-        if (!tags.Any(static pair => pair.Key == "sgr.tool.name"))
+        if (!tags.Any(static pair => pair.Key == ToolNameTag))
         {
-            tags.Add("sgr.tool.name", toolName);
+            tags.Add(ToolNameTag, toolName);
         }
 
         ToolFailureCounter.Add(1, tags);
@@ -290,4 +282,11 @@ public static class SgrTelemetry
 
         return tags;
     }
+
+    private static TagList CreateScenarioTags(string scenarioName, string reasonerMode) =>
+        new()
+        {
+            { ScenarioNameTag, scenarioName },
+            { ReasonerModeTag, reasonerMode }
+        };
 }
