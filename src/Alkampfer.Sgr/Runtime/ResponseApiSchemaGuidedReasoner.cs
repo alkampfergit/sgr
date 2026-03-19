@@ -278,9 +278,8 @@ public class ResponseApiSchemaGuidedReasoner
                 SgrTelemetry.RecordLlmCallStarted(ResponseApiProvider, _deploymentId);
                 llmStopwatch = Stopwatch.StartNew();
 
-                _logger.LogInformation("Requesting next reasoning step from the Azure OpenAI Response API.");
                 _logger.LogInformation(
-                    "Response API request details. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
+                    "Requesting next reasoning step from the Azure OpenAI Response API. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
                     systemPrompt,
                     dumpAllPrompt);
 

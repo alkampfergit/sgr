@@ -248,9 +248,8 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
             SgrTelemetry.RecordLlmCallStarted(ResponseApiProvider, $"{_deploymentId}:{phaseName}");
             llmStopwatch = Stopwatch.StartNew();
 
-            _logger.LogInformation("Requesting {PhaseName} reasoning step from the Azure OpenAI Response API.", phaseName);
             _logger.LogInformation(
-                "Response API {PhaseName} request details. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
+                "Requesting {PhaseName} reasoning step from the Azure OpenAI Response API. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
                 phaseName,
                 inputItems.OfType<MessageResponseItem>().FirstOrDefault(m => m.Role == MessageRole.System)?.Content.FirstOrDefault()?.Text ?? string.Empty,
                 dumpAllPrompt);
@@ -378,10 +377,10 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
             SgrTelemetry.RecordLlmCallStarted(ResponseApiProvider, $"{_deploymentId}:{phaseName}:{toolCallType.Name}");
             llmStopwatch = Stopwatch.StartNew();
 
-            _logger.LogInformation("Requesting {PhaseName} tool parameters for {ToolName} from the Azure OpenAI Response API.", phaseName, toolCallType.Name);
             _logger.LogInformation(
-                "Response API {PhaseName} request details. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
+                "Requesting {PhaseName} tool parameters for {ToolName} from the Azure OpenAI Response API. System prompt: {SystemPrompt}; Prompt payload: {PromptPayload}",
                 phaseName,
+                toolCallType.Name,
                 systemPrompt,
                 dumpAllPrompt);
 
@@ -576,7 +575,7 @@ public class ResponseApiForcedToolSchemaGuidedReasoner
         }
     }
 
-    private string BuildForcedToolPrompt(string baseSystemPrompt, ForcedReasonerPlanStep firstPlannedStep, Type toolCallType)
+    private static string BuildForcedToolPrompt(string baseSystemPrompt, ForcedReasonerPlanStep firstPlannedStep, Type toolCallType)
     {
         var discriminator = BusinessFunctionFactory.GetToolDiscriminatorValue(toolCallType);
         return $@"{baseSystemPrompt}
@@ -636,7 +635,7 @@ The tool discriminator/type must be ""{discriminator}"".";
         throw new InvalidOperationException($"Could not identify a tool to execute from the first planned step tool id '{firstPlannedStep.ToolId}'.");
     }
 
-    private bool TryCompleteFromPlannedStep(ForcedReasonerNextStep plannedStep, out string completionSummary)
+    private static bool TryCompleteFromPlannedStep(ForcedReasonerNextStep plannedStep, out string completionSummary)
     {
         if (!plannedStep.TaskCompleted)
         {
