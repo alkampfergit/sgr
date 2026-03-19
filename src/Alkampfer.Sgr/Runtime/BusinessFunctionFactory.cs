@@ -303,7 +303,7 @@ public class BusinessFunctionFactory
             SgrTelemetry.RecordToolFailed(toolActivity, toolName, stopwatch.Elapsed);
             SgrTelemetry.MarkError(toolActivity, ex);
             _logger.LogError(ex, "Tool {ToolName} failed", toolName);
-            throw;
+            throw new InvalidOperationException($"Tool '{toolName}' execution failed.", ex);
         }
     }
 
@@ -423,7 +423,7 @@ public class BusinessFunctionFactory
         return _schemaManager.GenerateDerivedTypeSchema(toolCallType);
     }
 
-    public ToolCall? DeserializeToolCall(string json, Type toolCallType)
+    public static ToolCall? DeserializeToolCall(string json, Type toolCallType)
     {
         if (string.IsNullOrWhiteSpace(json)) throw new ArgumentException("JSON payload is required.", nameof(json));
         if (toolCallType is null) throw new ArgumentNullException(nameof(toolCallType));
@@ -435,7 +435,7 @@ public class BusinessFunctionFactory
         return JsonConvert.DeserializeObject(json, toolCallType) as ToolCall;
     }
 
-    public string GetToolDiscriminatorValue(Type toolCallType)
+    public static string GetToolDiscriminatorValue(Type toolCallType)
     {
         if (toolCallType is null) throw new ArgumentNullException(nameof(toolCallType));
         return PolymorphicSchemaManager<NextStep, ToolCall>.GetDiscriminatorValue(toolCallType);
